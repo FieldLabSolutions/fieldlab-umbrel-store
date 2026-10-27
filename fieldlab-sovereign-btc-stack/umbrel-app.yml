@@ -3,7 +3,7 @@ manifestVersion: 1
 id: fieldlab-sovereign-btc-stack
 category: bitcoin
 name: Sovereign BTC Stack
-version: "2.0.0"
+version: "2.1.0"
 tagline: Read-only dashboard for your whole Bitcoin stack
 description: >-
   Auto-detects your node, indexer, explorer, Lightning and mining apps, shows how they connect,
