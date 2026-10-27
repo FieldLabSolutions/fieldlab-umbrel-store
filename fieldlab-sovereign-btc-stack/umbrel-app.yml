@@ -1,0 +1,23 @@
+# UNTESTED - image digest pending first CI build
+manifestVersion: 1
+id: fieldlab-sovereign-btc-stack
+category: bitcoin
+name: Sovereign BTC Stack
+version: "2.0.0"
+tagline: Read-only dashboard for your whole Bitcoin stack
+description: >-
+  Auto-detects your node, indexer, explorer, Lightning and mining apps, shows how they connect,
+  flags anything down or lagging, and keeps 24h up/down history. Read-only: never changes anything.
+developer: Daniel White
+website: ""
+dependencies:
+  - bitcoin
+repo: "https://github.com/FieldLabSolutions/sovereign-btc-stack"
+support: ""
+port: 3880
+gallery: []
+path: ""
+defaultUsername: ""
+defaultPassword: ""
+submitter: Daniel White
+submission: ""

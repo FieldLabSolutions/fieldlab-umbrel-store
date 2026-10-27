@@ -1,0 +1,26 @@
+# UNTESTED - image digest pending first CI build
+version: "3.7"
+services:
+  app_proxy:
+    environment:
+      APP_HOST: fieldlab-sovereign-btc-stack_web_1
+      APP_PORT: 3880
+  web:
+    image: ghcr.io/fieldlabsolutions/sovereign-btc-stack:2.0.0  # TODO pin @sha256 after first CI build
+    restart: on-failure
+    user: "1000:1000"
+    read_only: true
+    environment:
+      PORT: 3880
+      BITCOIN_RPC_HOST: $APP_BITCOIN_NODE_IP
+      BITCOIN_RPC_PORT: $APP_BITCOIN_RPC_PORT
+      BITCOIN_RPC_USER: $APP_BITCOIN_RPC_USER
+      BITCOIN_RPC_PASS: $APP_BITCOIN_RPC_PASS
+      APP_DATA_DIR: /umbrel-app-data
+      DATA_PATH: /host-data
+      HISTORY_FILE: /data/history.json
+      # ALERT_WEBHOOK_URL: ""   # off by default
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${UMBREL_ROOT}/app-data:/umbrel-app-data:ro   # UNVERIFIED that Umbrel allows this mount
+      - ${UMBREL_ROOT}:/host-data:ro                  # for disk usage of /mnt/data (UNVERIFIED)
