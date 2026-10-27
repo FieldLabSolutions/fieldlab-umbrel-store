@@ -12,10 +12,7 @@ services:
     read_only: true
     environment:
       PORT: 3880
-      BITCOIN_RPC_HOST: $APP_BITCOIN_NODE_IP
-      BITCOIN_RPC_PORT: $APP_BITCOIN_RPC_PORT
-      BITCOIN_RPC_USER: $APP_BITCOIN_RPC_USER
-      BITCOIN_RPC_PASS: $APP_BITCOIN_RPC_PASS
+      # No install requirements: Core RPC details are optional (set BITCOIN_RPC_USER/PASS later).
       APP_DATA_DIR: /umbrel-app-data
       DATA_PATH: /host-data
       HISTORY_FILE: /data/history.json

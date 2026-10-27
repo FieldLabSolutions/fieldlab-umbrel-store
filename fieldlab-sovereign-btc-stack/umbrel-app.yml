@@ -10,8 +10,7 @@ description: >-
   flags anything down or lagging, and keeps 24h up/down history. Read-only: never changes anything.
 developer: Daniel White
 website: ""
-dependencies:
-  - bitcoin
+dependencies: []
 repo: "https://github.com/FieldLabSolutions/sovereign-btc-stack"
 support: ""
 port: 3880
