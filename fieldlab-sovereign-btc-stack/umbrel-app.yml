@@ -1,4 +1,4 @@
-# UNTESTED - image digest pending first CI build
+# UNTESTED
 manifestVersion: 1
 id: fieldlab-sovereign-btc-stack
 category: bitcoin

@@ -1,4 +1,4 @@
-# UNTESTED - image digest pending first CI build
+# UNTESTED
 version: "3.7"
 services:
   app_proxy:
@@ -6,7 +6,7 @@ services:
       APP_HOST: fieldlab-sovereign-btc-stack_web_1
       APP_PORT: 3880
   web:
-    image: ghcr.io/fieldlabsolutions/sovereign-btc-stack:2.0.0  # TODO pin @sha256 after first CI build
+    image: ghcr.io/fieldlabsolutions/sovereign-btc-stack:2.0.0@sha256:d6ebc9402de6045f627b83269622aeebd3469c533299fbfd62122ef774d90c06
     restart: on-failure
     user: "1000:1000"
     read_only: true
