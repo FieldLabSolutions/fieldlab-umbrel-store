@@ -3,7 +3,7 @@ manifestVersion: 1
 id: fieldlab-sovereign-btc-stack
 category: bitcoin
 name: Sovereign BTC Stack
-version: "2.1.0"
+version: "2.2.0"
 tagline: Read-only dashboard for your whole Bitcoin stack
 description: >-
   Auto-detects your node, indexer, explorer, Lightning and mining apps, shows how they connect,
@@ -18,5 +18,10 @@ gallery: []
 path: ""
 defaultUsername: ""
 defaultPassword: ""
+releaseNotes: >-
+  Lines now show real connection health: red and broken when a part can't communicate, amber while the node
+  syncs or a part is behind, blue when waiting on you (like creating the LND wallet), gray dashed when not
+  installed or unknown, green only when verified. Detects that Bitcoin Core is still syncing even without an
+  RPC login (using Mempool and Electrs heights). Every box and flagged line now has a plain-words guide.
 submitter: Daniel White
 submission: ""
