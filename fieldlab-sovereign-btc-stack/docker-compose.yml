@@ -6,7 +6,7 @@ services:
       APP_HOST: fieldlab-sovereign-btc-stack_web_1
       APP_PORT: 3880
   web:
-    image: ghcr.io/fieldlabsolutions/sovereign-btc-stack:2.2.0@sha256:9b7ce6550a336a75da17d6274184c76c013b27c48cd1b571b3a7139481af8304
+    image: ghcr.io/fieldlabsolutions/sovereign-btc-stack:2.3.0@sha256:bd2ba40937a9cbfb35665d91d3df554604a0cd386986343ae975d8c8e02c723b
     restart: on-failure
     user: "1000:1000"
     read_only: true

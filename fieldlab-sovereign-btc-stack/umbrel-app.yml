@@ -3,7 +3,8 @@ manifestVersion: 1
 id: fieldlab-sovereign-btc-stack
 category: bitcoin
 name: Sovereign BTC Stack
-version: "2.2.0"
+version: "2.3.0"
+icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-sovereign-btc-stack/icon.png
 tagline: Read-only dashboard for your whole Bitcoin stack
 description: >-
   Auto-detects your node, indexer, explorer, Lightning and mining apps, shows how they connect,
@@ -19,9 +20,10 @@ path: ""
 defaultUsername: ""
 defaultPassword: ""
 releaseNotes: >-
-  Lines now show real connection health: red and broken when a part can't communicate, amber while the node
-  syncs or a part is behind, blue when waiting on you (like creating the LND wallet), gray dashed when not
-  installed or unknown, green only when verified. Detects that Bitcoin Core is still syncing even without an
-  RPC login (using Mempool and Electrs heights). Every box and flagged line now has a plain-words guide.
+  New app icon. On wide desktop screens the top bar is now a left-to-right dashboard: bigger title and the
+  current Bitcoin price on the far left, quick stats in the middle (network tip, node height, sync %, index
+  height, mempool size, fees), status pills on the right. The price comes from your own Mempool or a public
+  price API (turn off with PRICE_ENABLED=0); offline it shows "Price unavailable", never an old number.
+  Phone layout is unchanged.
 submitter: Daniel White
 submission: ""
