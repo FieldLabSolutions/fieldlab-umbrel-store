@@ -1,0 +1,82 @@
+manifestVersion: 1
+id: fieldlab-miner-controller
+name: Miner Controller 3000
+tagline: Weather-driven heat controller for the home miners (Avalon Qs + BitAxe)
+icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-miner-controller/icon.png
+category: bitcoin
+version: "1.5.11"
+port: 8742
+description: >-
+  Private LAN controller for home Avalon Q miners and BitAxes.
+  Picks Eco/Standard/Standby from outside temperature (NWS KGGG) with hysteresis and a
+  30-minute minimum between changes, holds mode if weather is missing, never picks Super
+  in auto. Read-only Home Assistant indoor sensors (shadow log only). Only allowlisted
+  miner commands; no pool, worker, wallet or payout changes.
+developer: Miner Ops (private)
+website: ""
+submitter: Miner Ops
+submission: ""
+repo: ""
+support: ""
+gallery: []
+releaseNotes: >-
+  1.5.11: The Outside graph now has a Now line with a dot on the curve, and Now sits in the middle: the
+  last 24 hours of real readings (gray) on the left, the next 24 hours of forecast (orange) on the right.
+  It slides along as the day goes on. Heat control, pools and Block Party are unchanged.
+
+  1.5.10: On phones, House and Lab now start as small cards showing the miner count, hashrate and room
+  temp with the room color; tap one to open the full card, tap the X to shrink it back. Desktop is
+  unchanged. Heat control, pools and Block Party are unchanged.
+
+  1.5.9: House and the OCEAN earnings card now run full width like the Lab. OCEAN shows just the unpaid
+  BTC, next-block estimate and last 24h; tap it for the full details. Heat control, pools and Block Party
+  are unchanged.
+
+  1.5.8: The House now gets its own square like the Lab: House temp (big) on the right and the House
+  Avalon Q as a row inside, tap it for the full view and Go to device. Another House miner just needs its
+  IP added to house_group. The separate House temp tile and House miner card are gone. Heat control and
+  Block Party are unchanged.
+
+  1.5.7: Miner Controller 3000. The header is one neat line: name with version and update time on the left,
+  the Outside temp card in the middle, Block Party with its switch on the right. Tapping either card opens
+  it in the middle of the screen; close with the X, Esc or a tap outside. The 1h/24h/7d/30d/6mo buttons
+  moved down above the chart. The Outside panel shows the coming temperature swings (next 48 hours) and lets
+  you look up a ZIP and save it as your location for good. Backup-station notes and warnings are gone.
+  Block Party settings and behavior are unchanged.
+
+  1.5.6: Outside temp is now an expandable card at the top of the header: tap it for details and to set the
+  weather location by ZIP code (nearest NWS station plus fallbacks; Reset to Longview (KGGG)). The Block Party
+  card sits on the right of the header: its switch flips without opening the card, and all Block Party
+  settings now live inside that card instead of the Settings page. Tiers and hysteresis are unchanged.
+
+  1.5.5: New Lab square: the Lab temp, the Lab Avalon Q (.85), the BitAxe and the new FutureBit Apollo
+  share one card; the top strip shows Outside and House. The Apollo is watched read-only
+  (is its web page answering): hashrate and pool show as unknown until a stats source is added. Offline
+  alert after 3 missed checks, with an "Apollo enabled" switch in Settings. Editable nickname. The Apollo
+  is never written to and is not in Block Party or the heat schedule.
+  1.5.4: Dashboard renamed to Miner Controller. Outside, Lab and House temps now sit side by side as big
+  numbers in one card (stale readings marked). Block Party is a slim one-row bar; tap it for details.
+  Fixes a false "still on Rigly outside the window" banner right after a restore (it read the BitAxe sample
+  taken before the restore); a fresh reading still on Rigly still raises it.
+  1.5.3: BitAxe Block Party fixed for AxeOS 2.15 (pool list): if a Rigly pool is already on the BitAxe it
+  becomes primary with DATUM as fallback, and swaps back after. Checks the switch actually took and
+  shows every skip reason on the dashboard.
+  1.5.2: Fixes "pool slots unreadable" on Avalon Qs (they list only configured slots). If a Q already
+  has a Rigly pool slot, Block Party now switches by priority only: no slot rewrite, no reboot, no
+  password needed, and switches back to DATUM after.
+  1.5.1: Block Party now moves the Avalon Qs too, once you enter the Avalon admin password
+  (typed twice) in Settings. Rigly goes in pool slot 1 with DATUM kept as backup, one reboot each
+  way, saved pools put back exactly after, and the work mode is checked and put back after each reboot.
+  Without the password the Avalon Qs stay on DATUM.
+  1.5.0: Block Party on/off switch on the dashboard (ships OFF). Daily window, default 9 AM to 5 PM CT,
+  editable in Settings. BitAxe switches to Rigly (solo.ckpool.org:3333) in the window and back to its saved
+  DATUM pool after; Avalon Qs stay on DATUM. Fixed Rigly prefix plus an editable worker suffix.
+  1.4.9: Cleaner dashboard. Each miner is a compact card (picture, name, IP, hashrate, mode,
+  alert badges); tap it for the full details and a big "Go to device" button. BitAxe graphs removed.
+  1.4.8: "Heaters" renamed to "miners". The OCEAN low-hashrate alert now shows which address
+  it checks (masked), when OCEAN last saw hashrate for it, and how to fix it; after a payout
+  address change it shows a yellow "waiting for OCEAN" note for 45 minutes instead.
+dependencies: []
+path: ""
+defaultUsername: ""
+defaultPassword: ""

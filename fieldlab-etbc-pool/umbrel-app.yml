@@ -1,0 +1,39 @@
+manifestVersion: 1
+id: fieldlab-etbc-pool
+category: bitcoin
+name: ETBC Pool
+icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-etbc-pool/icon.png
+tagline: Private LAN solo mining pool (ckpool) on your own node
+version: "0.1.5"
+port: 8745
+description: >-
+  Private LAN solo pool for your miners. Point a miner at stratum+tcp://<UMBREL_LAN_IP>:3333
+  and use your own BTC address as the username (optionally address.worker); any password.
+  A found block pays straight to that address. LAN only, not exposed to the internet.
+
+
+  Upstream ckpool (GPLv3), commit 9578eb69 plus a small sharelog-only patch, solo mode, using this Umbrel's Bitcoin
+  node over RPC + ZMQ. Source: https://bitbucket.org/ckolivas/ckpool
+developer: Con Kolivas (ckpool); packaged by Miner Ops
+website: https://bitbucket.org/ckolivas/ckpool
+dependencies:
+  - bitcoin
+repo: https://bitbucket.org/ckolivas/ckpool
+support: https://bitbucket.org/ckolivas/ckpool
+gallery: []
+path: ""
+defaultUsername: ""
+defaultPassword: ""
+releaseNotes: >-
+  0.1.5: Turns on share logging. Every share is appended as one JSON line, including the miner's
+  version-rolling bits (version_mask), to data/logs/<block height>/<job>.sharelog; files older than
+  14 days are deleted automatically. Built from ckpool 9578eb69 with a small logging-only patch
+  (no change to share checking, pool, payout or worker settings).
+
+
+  0.1.4: Adds a "Blocks found" card to the dashboard (height, masked worker, time, mempool.space link),
+  kept in data/history/blocks.csv and backfilled from the existing pool log. Shows the pool's
+  graffiti (coinbase signature). New optional settings file data/ckpool-overrides.json lets you change
+  the graffiti (btcsig) and a few ckpool tuning values; changes take effect when the app restarts.
+  Bad values are ignored with a warning in data/logs/overrides.log and the pool starts on defaults.
+submitter: Miner Ops

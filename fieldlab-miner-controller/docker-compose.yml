@@ -1,0 +1,24 @@
+version: "3.7"
+
+services:
+  app_proxy:
+    environment:
+      # <app-id>_<service-name>_1
+      APP_HOST: fieldlab-miner-controller_web_1
+      APP_PORT: 8080
+
+  web:
+    # Public multi-arch image (linux/arm64 + linux/amd64). Pinned by digest.
+    image: ghcr.io/fieldlabsolutions/miner-controller:1.5.11@sha256:38e6259da0fb70b88e3f47b6fac204487652283d113a1e803f20f98eeae8fb43
+    restart: on-failure
+    user: "1000:1000"
+    init: true
+    stop_grace_period: 30s
+    environment:
+      TZ: America/Chicago
+      # Browser POSTs arrive through Umbrel's app proxy; allow exactly these origins.
+      # Add your Umbrel LAN origin too, e.g. "http://umbrel.local:8742,http://<UMBREL_LAN_IP>:8742"
+      MINER_OPS_TRUSTED_ORIGINS: "http://umbrel.local:8742"
+    volumes:
+      # state.json, changes.csv, controller.log, metrics.sqlite3, shadow.csv, ha_token
+      - ${APP_DATA_DIR}/data:/data

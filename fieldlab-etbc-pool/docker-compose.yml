@@ -1,0 +1,38 @@
+version: "3.7"
+
+services:
+  app_proxy:
+    environment:
+      APP_HOST: fieldlab-etbc-pool_web_1
+      APP_PORT: 8080
+
+  web:
+    # Dashboard, pool.status, hashrate history and blocks-found tracker, all baked into the image (/opt/web)
+    image: ghcr.io/fieldlabsolutions/etbc-pool:0.1.5@sha256:26d3a66c33420c8dcc418b57dff907060691e803abe5781ffd05b7ba1df954df   # public multi-arch, pinned by digest
+    entrypoint: ["/bin/sh", "/opt/web/run.sh"]
+    restart: on-failure
+    user: "1000:1000"
+    volumes:
+      # read-write so the recorder can keep data/history/hashrate.csv (14 days)
+      - ${APP_DATA_DIR}/data:/data
+
+  pool:
+    image: ghcr.io/fieldlabsolutions/etbc-pool:0.1.5@sha256:26d3a66c33420c8dcc418b57dff907060691e803abe5781ffd05b7ba1df954df   # public multi-arch, pinned by digest
+    restart: on-failure
+    user: "1000:1000"
+    init: true
+    stop_grace_period: 30s
+    ports:
+      # Stratum on the Umbrel's LAN IP (LAN only; no router forward, no tunnel)
+      - 3333:3333
+    # share logging (-L) always on: data/logs/<height>/<workbase>.sharelog, pruned after 14 days
+    # optional tuning: data/ckpool-overrides.json (see data/ckpool-overrides.example.json), applied on restart
+    environment:
+      RPC_HOST: ${APP_BITCOIN_NODE_IP}
+      RPC_PORT: ${APP_BITCOIN_RPC_PORT}
+      RPC_USER: ${APP_BITCOIN_RPC_USER}
+      RPC_PASS: ${APP_BITCOIN_RPC_PASS}
+      ZMQ_HASHBLOCK: tcp://${APP_BITCOIN_NODE_IP}:${APP_BITCOIN_ZMQ_HASHBLOCK_PORT}
+      STRATUM_PORT: 3333
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
