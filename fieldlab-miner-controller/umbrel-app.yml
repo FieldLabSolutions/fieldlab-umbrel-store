@@ -4,7 +4,7 @@ name: Miner Controller 3000
 tagline: Weather-driven heat controller for the home miners (Avalon Qs + BitAxe)
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-miner-controller/icon.png
 category: bitcoin
-version: "1.5.12"
+version: "1.5.13"
 port: 8742
 description: >-
   Private LAN controller for home Avalon Q miners and BitAxes.
@@ -20,6 +20,9 @@ repo: ""
 support: ""
 gallery: []
 releaseNotes: >-
+  1.5.13: Each miner card now shows a badge for the pool it is using right now: DATUM, Our pool, Block Party,
+  OCEAN, or a warning for a solo ckpool fallback.
+
   1.5.12: Adds an Add Miner button (next to Block Party; alias and all settings, editable later) and an
   Add / Edit Room button next to the title. Heat control, pools and Block Party are unchanged.
 
