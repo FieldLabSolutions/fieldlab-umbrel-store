@@ -9,7 +9,7 @@ services:
 
   web:
     # Public multi-arch image (linux/arm64 + linux/amd64). Pinned by digest.
-    image: ghcr.io/fieldlabsolutions/miner-controller:1.5.11@sha256:38e6259da0fb70b88e3f47b6fac204487652283d113a1e803f20f98eeae8fb43
+    image: ghcr.io/fieldlabsolutions/miner-controller:1.5.12@sha256:828d5f782fd7770897951e09c89b51731b80233a0ab334884cad3363dd3f6be3
     restart: on-failure
     user: "1000:1000"
     init: true
@@ -18,7 +18,7 @@ services:
       TZ: America/Chicago
       # Browser POSTs arrive through Umbrel's app proxy; allow exactly these origins.
       # Add your Umbrel LAN origin too, e.g. "http://umbrel.local:8742,http://<UMBREL_LAN_IP>:8742"
-      MINER_OPS_TRUSTED_ORIGINS: "http://umbrel.local:8742"
+      MINER_OPS_TRUSTED_ORIGINS: "http://192.168.4.60:8742,http://umbrel.local:8742"
     volumes:
       # state.json, changes.csv, controller.log, metrics.sqlite3, shadow.csv, ha_token
       - ${APP_DATA_DIR}/data:/data
