@@ -3,7 +3,7 @@ manifestVersion: 1
 id: fieldlab-sovereign-btc-stack
 category: bitcoin
 name: Sovereign BTC Stack
-version: "2.3.1"
+version: "2.4.0"
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-sovereign-btc-stack/icon.png
 tagline: Read-only dashboard for your whole Bitcoin stack
 description: >-
@@ -20,7 +20,8 @@ path: ""
 defaultUsername: ""
 defaultPassword: ""
 releaseNotes: >-
-  Slim one-line desktop top bar: big title on the left, quick stats in the middle, Bitcoin price and
-  status on the right. The chart now uses more of the wide screen. Phone layout is unchanged.
+  New DATUM card in the flow (Bitcoin node to DATUM to mining). The Mining card now finds ETBC Pool and
+  Miner Controller. Browser tab icon added. Electrs shows amber "still building its index" instead of red
+  while it indexes. "See other options" entries now link to each app's App Store page.
 submitter: Daniel White
 submission: ""
