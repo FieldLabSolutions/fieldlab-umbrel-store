@@ -7,7 +7,38 @@ async function api(path, body) {
   const j = await r.json(); if (!r.ok) throw new Error(j.error || 'Error'); return j;
 }
 function toast(msg) { const t = $('toast'); t.style.background = /^Saved/.test(msg) ? 'var(--ok)' : ''; t.textContent = msg; t.classList.remove('hidden'); setTimeout(() => t.classList.add('hidden'), 5000); }
-const guard = fn => async (...a) => { try { await fn(...a); } catch (e) { toast(e.message); } };
+const guard = fn => async (...a) => {
+  const ev = a[0], btn = ev && ev.currentTarget instanceof HTMLButtonElement ? ev.currentTarget : null;
+  if (btn) {
+    if (btn.dataset.busy) return;
+    btn.dataset.busy = '1'; btn.disabled = true; btn.dataset.label = btn.textContent; btn.textContent = btn.dataset.busyLabel || 'Working…';
+  }
+  try { await fn(...a); } catch (e) { toast(e.message); }
+  finally { if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = btn.dataset.label; delete btn.dataset.busy; } }
+};
+function confetti() {
+  const c = document.createElement('canvas'); c.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:9999';
+  c.width = innerWidth; c.height = innerHeight; document.body.appendChild(c);
+  const x = c.getContext('2d'), cols = ['#f7931a', '#3ecf8e', '#ff5c5c', '#4da3ff', '#ffd93d', '#c77dff'];
+  const ps = Array.from({ length: 160 }, () => ({ x: c.width / 2 + (Math.random() - .5) * 120, y: c.height * .45, vx: (Math.random() - .5) * 16, vy: -Math.random() * 16 - 4, w: 6 + Math.random() * 6, h: 4 + Math.random() * 6, r: Math.random() * 6, vr: (Math.random() - .5) * .4, col: cols[Math.floor(Math.random() * cols.length)] }));
+  const t0 = performance.now();
+  (function frame(t) {
+    const age = t - t0; x.clearRect(0, 0, c.width, c.height);
+    ps.forEach(p => { p.vy += .35; p.vx *= .99; p.x += p.vx; p.y += p.vy; p.r += p.vr; x.save(); x.globalAlpha = Math.max(0, 1 - age / 3200); x.translate(p.x, p.y); x.rotate(p.r); x.fillStyle = p.col; x.fillRect(-p.w / 2, -p.h / 2, p.w, p.h); x.restore(); });
+    if (age < 3200) requestAnimationFrame(frame); else c.remove();
+  })(t0);
+}
+async function loadSent() {
+  const h = await api('history');
+  const items = h.items.filter(i => i.kind === 'boost' && !i.dryRun && i.results && i.results.some(r => r.status === 'sent')).slice(0, 50);
+  const total = items.reduce((n, i) => n + Number(i.sats || 0), 0);
+  $('sentList').innerHTML = items.length ? `<div>${items.length} boost${items.length === 1 ? '' : 's'} · <b>${fmt(total)}</b> sats total</div>` + items.map(i => `<div class="sent"><b>${esc(i.show || '')}</b> · ${fmt(i.sats)} sats<br><span class="muted">${esc(i.episode || '')}${i.message ? ' · “' + esc(i.message) + '”' : ''}<br>${new Date(i.ts).toLocaleString()}${i.results.every(r => r.status === 'sent') ? '' : ' · <span class="bad">partial</span>'}</span></div>`).join('') : 'Nothing sent yet.';
+}
+function resetBoostScreen() {
+  $('preview').classList.add('hidden'); $('preview').innerHTML = ''; $('show').classList.add('hidden');
+  $('feedUrl').value = ''; $('message').value = ''; $('boostSats').value = '100'; $('saved').value = ''; $('results').innerHTML = '';
+  feedUrl = null; plan = null; loaded = null; syncSaved(); window.scrollTo({ top: 0, behavior: 'smooth' });
+}
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x === b));
   document.querySelectorAll('main section').forEach(s => s.classList.toggle('hidden', s.id !== 'tab-' + b.dataset.tab));
@@ -49,11 +80,15 @@ $('btnPreview').onclick = guard(async () => {
     <button id="btnSend" class="primary">${plan.dryRun ? 'Send (dry run)' : 'Send ' + fmt(plan.sats) + ' sats'}</button><button id="btnCancel">Cancel</button>`;
   $('preview').classList.remove('hidden');
   $('btnCancel').onclick = () => $('preview').classList.add('hidden');
+  $('btnSend').dataset.busyLabel = 'Sending…'; $('btnCancel').onclick = () => { if (!$('btnSend').dataset.busy) $('preview').classList.add('hidden'); };
   $('btnSend').onclick = guard(async () => {
-    $('btnSend').disabled = true;
+    $('btnCancel').disabled = true;
     const r = await api('boost/send', { planId: plan.id, confirm: true });
     $('preview').innerHTML = `<h2>${r.dryRun ? 'Dry run done' : 'Boost sent'}</h2>` + r.results.map(x => `<div>${esc(x.name)}: ${fmt(x.sats)} sats – <span class="${x.status === 'failed' ? 'bad' : 'ok'}">${esc(x.status)}</span> ${esc(x.error || '')}</div>`).join('');
-    init();
+    init(); guard(loadSent)();
+    if (!r.dryRun && r.results.length && r.results.every(x => x.status === 'sent')) {
+      confetti(); toast('Saved: boost sent'); setTimeout(resetBoostScreen, 2800);
+    }
   });
 });
 $('btnDecode').onclick = guard(async () => {
@@ -62,8 +97,8 @@ $('btnDecode').onclick = guard(async () => {
     ${payDec.expired ? '<p class="bad">This invoice has expired.</p>' : `<button id="btnPay" class="primary">Pay${''}</button>`}<button id="btnPayCancel">Cancel</button>`;
   $('payPreview').classList.remove('hidden');
   $('btnPayCancel').onclick = () => $('payPreview').classList.add('hidden');
+  if (!payDec.expired) $('btnPay').dataset.busyLabel = 'Paying…';
   if (!payDec.expired) $('btnPay').onclick = guard(async () => {
-    $('btnPay').disabled = true;
     const r = await api('pay', { invoice: payDec.invoice, expectSats: payDec.sats, confirm: true });
     $('payPreview').innerHTML = `<h2 class="${r.status === 'failed' ? 'bad' : 'ok'}">${esc(r.status)}</h2>${esc(r.error || '')}`; init();
   });
@@ -199,6 +234,7 @@ $('btnChanPreview').onclick = guard(async () => {
     <tr><td>On-chain left after open</td><td class="r">~${fmt(c.remainingSats)} sats (incl. ${fmt(c.reserve)} reserve)</td></tr></table>
     <button id="btnChanOpen" class="primary">${c.dryRun ? 'Simulate open (dry run)' : 'Confirm: open ' + fmt(c.sats) + ' sat channel'}</button><button id="btnChanCancel">Back</button>`;
   $('btnChanCancel').onclick = () => { $('chanPreview').innerHTML = ''; $('chanForm').classList.remove('hidden'); chanPlan = null; };
+  $('btnChanOpen').dataset.busyLabel = 'Opening…';
   $('btnChanOpen').onclick = guard(async () => {
     if (!confirm(`Open a ${fmt(c.sats)} sat channel to ${c.peerName} at ${c.feeRate} sat/vB? This spends on-chain funds.`)) return;
     const r = await api('channel/open', { planId: c.id, confirm: true });
@@ -236,4 +272,4 @@ $('btnScbRestore').onclick = guard(async () => {
   const bytes = new Uint8Array(await f.arrayBuffer()); let bin = ''; bytes.forEach(x => { bin += String.fromCharCode(x); });
   await api('backup/restore', { backup: btoa(bin), confirm: true }); $('scbFile').value = ''; toast('Saved: channel backup submitted to LND');
 });
-guard(init)(); guard(loadSaved)();
+guard(init)(); guard(loadSaved)(); guard(loadSent)();

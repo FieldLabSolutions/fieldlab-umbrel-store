@@ -17,6 +17,7 @@
     <label>Message<textarea id="message" rows="2" maxlength="500"></textarea></label>
     <button id="btnPreview" class="primary">Review boost</button></div>
   <div id="preview" class="card hidden"></div>
+  <div class="card"><h2>Boosts sent</h2><div id="sentList" class="small muted">Nothing sent yet.</div></div>
 </section>
 <section id="tab-pay" class="hidden"><div class="card"><textarea id="bolt11" rows="3" placeholder="Paste BOLT11 invoice (lnbc…)"></textarea><button id="btnDecode">Decode</button></div><div id="payPreview" class="card hidden"></div></section>
 <section id="tab-receive" class="hidden"><div class="card"><label>Amount (sats)<input id="invSats" type="number" inputmode="numeric" placeholder="e.g. 1000"></label><label>Memo<input id="invMemo" placeholder="What is it for? (optional)"></label><button id="btnInvoice" class="primary">Create invoice</button></div><div id="invOut" class="card hidden"></div></section>
