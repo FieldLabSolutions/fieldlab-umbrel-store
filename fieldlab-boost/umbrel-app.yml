@@ -1,0 +1,26 @@
+manifestVersion: 1
+id: fieldlab-boost
+category: bitcoin
+name: Field Lab Boost
+icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-boost/icon.png
+version: "0.1.0"
+tagline: Podcasting 2.0 boosts, keysend and invoices from your node
+description: >-
+  Local-only web app for your Umbrel Lightning node. Search Podcast Index or paste an RSS
+  feed, review the show's value block payees and splits, and send boosts (keysend or
+  Lightning address). Also pay BOLT11 invoices and create invoices with a QR code.
+  Ships in DRY_RUN mode by default.
+developer: Field Lab
+website: ""
+dependencies:
+  - lightning
+repo: ""
+support: ""
+port: 8743
+gallery: []
+path: ""
+defaultUsername: ""
+defaultPassword: ""
+releaseNotes: "First version (local network only, dry-run default)."
+submitter: Field Lab
+submission: ""

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:podcast="https://podcastindex.org/namespace/1.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+<channel>
+  <title>Field Lab &amp; Friends</title>
+  <itunes:author>Daniel</itunes:author>
+  <itunes:image href="https://example.com/art.jpg"/>
+  <podcast:guid>917393e3-1b1e-5cef-ace4-edaa54e1f810</podcast:guid>
+  <podcast:value type="lightning" method="keysend" suggested="0.00000005000">
+    <podcast:valueRecipient name="Host" type="node" address="02d5c1bf8b940dc9cadca86d1b0a3c37fbe39cee4c7e839e33bef9174531d27f52" customKey="696969" customValue="eChoVKtO1KujpAA5HCoB" split="90"/>
+    <podcast:valueRecipient name="Cohost" type="lnaddress" address="cohost@127.0.0.1:PORT" split="10"/>
+    <podcast:valueRecipient name="App fee" type="node" address="03ae9f91a0cb8ff43840e3c322c4c61f019d8c1c3cea15a25cfc425ac605e61a4a" split="1" fee="true"/>
+  </podcast:value>
+  <item>
+    <title><![CDATA[Ep 2: Guest show]]></title><guid>ep2</guid>
+    <podcast:value type="lightning" method="keysend">
+      <podcast:valueRecipient name="Guest" type="node" address="02d5c1bf8b940dc9cadca86d1b0a3c37fbe39cee4c7e839e33bef9174531d27f52" split="50"/>
+      <podcast:valueRecipient name="Host" type="node" address="03ae9f91a0cb8ff43840e3c322c4c61f019d8c1c3cea15a25cfc425ac605e61a4a" split="50"/>
+    </podcast:value>
+  </item>
+  <item><title>Ep 1: Pilot</title><guid>ep1</guid></item>
+</channel></rss>

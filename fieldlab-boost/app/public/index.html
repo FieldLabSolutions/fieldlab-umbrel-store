@@ -1,0 +1,23 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Field Lab Boost</title><link rel="stylesheet" href="style.css"></head><body>
+<header><h1>⚡ Field Lab Boost</h1><div id="dry" class="badge hidden">DRY RUN – no sats move</div>
+<div id="summary" class="card small">Loading node…</div></header>
+<nav><button data-tab="boost" class="active">Boost</button><button data-tab="pay">Pay</button><button data-tab="receive">Receive</button><button data-tab="history">History</button></nav>
+<main>
+<section id="tab-boost">
+  <div class="card"><div id="searchBox" class="hidden"><input id="q" placeholder="Search Podcast Index"><button id="btnSearch">Search</button><div id="results"></div></div>
+  <input id="feedUrl" placeholder="Paste RSS feed URL" inputmode="url"><button id="btnFeed">Load feed</button></div>
+  <div id="show" class="card hidden"><div class="row"><img id="art" alt="" referrerpolicy="no-referrer"><div><h2 id="showTitle"></h2><div id="showAuthor" class="muted"></div></div></div>
+    <label>Episode<select id="episode"></select></label>
+    <label>Amount (sats)<input id="boostSats" type="number" inputmode="numeric" value="100"></label>
+    <div class="chips"><button data-amt="100">100</button><button data-amt="500">500</button><button data-amt="1000">1k</button><button data-amt="5000">5k</button></div>
+    <label>Your name<input id="sender"></label>
+    <label>Message<textarea id="message" rows="2" maxlength="500"></textarea></label>
+    <button id="btnPreview" class="primary">Review boost</button></div>
+  <div id="preview" class="card hidden"></div>
+</section>
+<section id="tab-pay" class="hidden"><div class="card"><textarea id="bolt11" rows="3" placeholder="Paste BOLT11 invoice (lnbc…)"></textarea><button id="btnDecode">Decode</button></div><div id="payPreview" class="card hidden"></div></section>
+<section id="tab-receive" class="hidden"><div class="card"><label>Amount (sats)<input id="invSats" type="number" inputmode="numeric" placeholder="e.g. 1000"></label><label>Memo<input id="invMemo" placeholder="What is it for? (optional)"></label><button id="btnInvoice" class="primary">Create invoice</button></div><div id="invOut" class="card hidden"></div></section>
+<section id="tab-history" class="hidden"><div id="history"></div></section>
+</main><div id="toast" class="hidden"></div>
+<script src="vendor/qrcode.js"></script><script src="app.js"></script></body></html>

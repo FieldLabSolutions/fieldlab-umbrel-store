@@ -1,0 +1,18 @@
+:root{--bg:#0d0f12;--card:#171a20;--fg:#e8eaed;--mut:#b8c0cc;--acc:#f7931a;--ok:#3ecf8e;--bad:#ff5c5c}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.4 system-ui,sans-serif;padding:12px;width:100%;max-width:480px;margin:auto}
+h1{font-size:22px;margin:4px 0}h2{font-size:19px;margin:0}.muted,.small{color:var(--mut);font-size:15px}
+.card{background:var(--card);border-radius:14px;padding:14px;margin:10px 0}.hidden{display:none!important}
+input,select,textarea{width:100%;font-size:17px;padding:12px;margin:6px 0;border-radius:10px;border:1px solid #2a2f38;background:#0f1216;color:var(--fg)}
+label{display:block;margin-top:10px;color:var(--mut);font-size:16px}
+button{width:100%;min-height:52px;font-size:18px;border:0;border-radius:12px;background:#2a2f38;color:var(--fg);margin:6px 0;cursor:pointer}
+button.primary{background:var(--acc);color:#111;font-weight:700}button.danger{background:var(--bad);color:#111;font-weight:700}
+nav{display:flex;gap:6px}nav button{min-height:46px;font-size:15px}nav button.active{background:var(--acc);color:#111}
+.chips{display:flex;gap:6px}.chips button{min-height:44px}
+.row{display:flex;gap:12px;align-items:center}#art{width:72px;height:72px;border-radius:10px;object-fit:cover;background:#2a2f38;flex:none}
+.badge{background:#3b2a00;color:var(--acc);padding:6px 10px;border-radius:8px;display:inline-block;font-weight:700;font-size:14px}
+table{width:100%;border-collapse:collapse;font-size:15px}td{padding:6px 4px;border-bottom:1px solid #2a2f38}td.r{text-align:right}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.res{padding:8px;border-radius:10px;background:#0f1216;margin:4px 0;cursor:pointer}
+#qr{background:#fff;padding:10px;border-radius:12px;display:flex;justify-content:center}#qr img{width:100%;max-width:300px;image-rendering:pixelated}
+.mono{font-family:ui-monospace,monospace;word-break:break-all;font-size:14px;color:#d5dae1}
+#toast{position:fixed;bottom:16px;left:16px;right:16px;background:var(--bad);color:#111;padding:14px;border-radius:12px;font-weight:600}
+#summary{font-size:16px;color:#d5dae1}

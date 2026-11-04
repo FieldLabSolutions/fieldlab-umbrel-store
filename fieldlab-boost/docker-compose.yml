@@ -1,0 +1,33 @@
+version: "3.7"
+
+services:
+  app_proxy:
+    environment:
+      APP_HOST: fieldlab-boost_web_1
+      APP_PORT: 8080
+    container_name: fieldlab-boost_app_proxy_1
+
+  web:
+    image: node:20-alpine
+    user: "1000:1000"
+    init: true
+    restart: on-failure
+    working_dir: /app
+    command: ["node", "server.js"]
+    volumes:
+      - ${APP_DATA_DIR}/app:/app:ro
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_LIGHTNING_NODE_DATA_DIR}:/lnd:ro
+    environment:
+      PORT: 8080
+      DATA_DIR: /data
+      LND_REST: https://${APP_LIGHTNING_NODE_IP}:8080
+      TLS_CERT_PATH: /lnd/tls.cert
+      # Use a limited baked macaroon (see README), not admin.macaroon
+      MACAROON_PATH: /data/boost.macaroon
+      DRY_RUN: "true"
+      SENDER_NAME: "Daniel"
+      MAX_PAYMENT_SATS: "50000"
+      # Optional Podcast Index search (leave empty to disable)
+      PODCASTINDEX_KEY: ""
+      PODCASTINDEX_SECRET: ""

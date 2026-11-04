@@ -1,0 +1,2 @@
+{ "name": "fieldlab-boost", "version": "0.1.0", "private": true, "license": "MIT",
+  "scripts": { "start": "node server.js", "test": "node --test test/unit.test.js test/e2e.test.js", "mock": "node test/mock-servers.js" } }
