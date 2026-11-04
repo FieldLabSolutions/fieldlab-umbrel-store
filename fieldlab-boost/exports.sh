@@ -9,7 +9,7 @@ BIN_ARGS=()
 BIN_ARGS+=( "--lnddir=/data/.lnd" )
 BIN_ARGS+=( "--alias=node-7f3a" "--color=#808080" )
 # No inbound at all: no P2P listener, no NAT/UPnP, no externalip, no hidden service.
-BIN_ARGS+=( "--nolisten" "--nat=false" )
+BIN_ARGS+=( "--nolisten" )
 BIN_ARGS+=( "--rpclisten=0.0.0.0:${APP_BOOST_LND_GRPC_PORT}" "--restlisten=0.0.0.0:${APP_BOOST_LND_REST_PORT}" )
 BIN_ARGS+=( "--tlsextraip=${APP_BOOST_LND_IP}" )
 # Auto-unlock flags are added by the lnd container's entrypoint (docker-compose.yml) ONLY when
@@ -34,7 +34,7 @@ BIN_ARGS+=( "--bitcoind.zmqpubrawtx=tcp://${APP_BITCOIN_NODE_IP}:${APP_BITCOIN_Z
 # Tor for OUTBOUND peer connections only, via umbrelOS's system Tor proxy
 # (TOR_PROXY_IP/TOR_PROXY_PORT are set by umbrelOS app-script, 10.21.21.11:9050).
 # No --tor.v3 / --tor.control => LND creates no hidden service.
-BIN_ARGS+=( "--tor.active" "--tor.socks=${TOR_PROXY_IP}:${TOR_PROXY_PORT}" "--tor.skip-proxy-for-clearnet-targets=false" )
+BIN_ARGS+=( "--tor.active" "--tor.socks=${TOR_PROXY_IP}:${TOR_PROXY_PORT}" )
 BIN_ARGS+=( "--maxpendingchannels=2" )
 
 export APP_BOOST_LND_COMMAND=$(IFS=" "; echo "${BIN_ARGS[@]}")

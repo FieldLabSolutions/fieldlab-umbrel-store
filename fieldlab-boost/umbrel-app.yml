@@ -3,7 +3,7 @@ id: fieldlab-boost
 category: bitcoin
 name: Dirty Boost Whore
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-boost/icon.png
-version: "0.2.0"
+version: "0.2.1"
 tagline: Podcasting 2.0 boosts from its own separate Lightning wallet
 description: >-
   Local-only web app with its own built-in LND wallet (separate seed, separate channels,
