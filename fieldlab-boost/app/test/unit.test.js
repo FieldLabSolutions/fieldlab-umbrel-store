@@ -69,3 +69,15 @@ test('shows: add/list/dedupe/remove', () => {
   assert.equal(s.remove('https://a.example/feed'), false);
   assert.deepEqual(s.list().map(x => x.name), ['Zed Renamed']);
 });
+
+test('every keysend boost carries app_name "Dirty Boost Whore" in record 7629169; sender_name untouched', () => {
+  const { APP_NAME } = require('../lib/keysend');
+  assert.equal(APP_NAME, 'Dirty Boost Whore');
+  for (const senderName of ['Dan', '', undefined]) {
+    const boost = buildBoostRecord({ podcast: 'P', senderName, message: 'm', valueMsat: 1000, valueMsatTotal: 1000 });
+    const ks = buildKeysend({ dest: '03' + 'bb'.repeat(32), sats: 1, boost });
+    const rec = JSON.parse(Buffer.from(ks.body.dest_custom_records['7629169'], 'base64'));
+    assert.equal(rec.app_name, 'Dirty Boost Whore'); assert.equal(rec.app_version, require('../package.json').version);
+    assert.equal(rec.sender_name, senderName);
+  }
+});

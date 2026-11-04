@@ -22,3 +22,4 @@ h1 .logo{width:28px;height:28px;vertical-align:-5px;border-radius:6px}
 label.check{display:flex;gap:10px;align-items:center;color:var(--fg)}label.check input{width:24px;height:24px;margin:0;flex:none}
 .warn{background:#3b2a00;color:var(--acc);padding:10px;border-radius:10px;margin:8px 0;font-size:15px}
 .danger-zone{border:2px solid var(--bad);margin-top:28px}
+fieldset.fees{border:1px solid #2a2f38;border-radius:8px;padding:6px 10px;margin:8px 0}fieldset.fees legend{font-size:.9em}

@@ -30,7 +30,8 @@ for (const dryRun of [true, false]) test(`full flow DRY_RUN=${dryRun}`, async ()
     const sent = await t.api('boost/send', { planId: pv.id, confirm: true });
     assert.deepEqual(sent.results.map(r => r.status), dryRun ? ['dry-run', 'dry-run', 'dry-run'] : ['sent', 'sent', 'sent'], JSON.stringify(sent.results));
     assert.equal(t.m.sent.length, dryRun ? 0 : 3);
-    if (!dryRun) { assert.equal(t.m.sent[0].dest_custom_records['696969'], Buffer.from('eChoVKtO1KujpAA5HCoB').toString('base64')); assert.equal(t.m.sent[1].payment_request, 'lnbcmock99n1lnurl');
+    if (!dryRun) { for (const x of t.m.sent.filter(x => x.dest_custom_records)) assert.equal(JSON.parse(Buffer.from(x.dest_custom_records['7629169'], 'base64')).app_name, 'Dirty Boost Whore');
+      assert.equal(t.m.sent[0].dest_custom_records['696969'], Buffer.from('eChoVKtO1KujpAA5HCoB').toString('base64')); assert.equal(t.m.sent[1].payment_request, 'lnbcmock99n1lnurl');
       const k = t.m.sent[0]; assert.equal(k.final_cltv_delta, 80); assert.equal(k.no_inflight_updates, true); assert.equal(k.timeout_seconds, 60); assert.ok(k.fee_limit_sat); assert.equal(k.fee_limit, undefined); assert.equal(t.m.sent[1].final_cltv_delta, undefined); }
     const replay = await t.api('boost/send', { planId: pv.id, confirm: true }); assert.equal(replay.ok, false);
     const d = await t.api('decode', { invoice: 'lnbcmock2100n1xyz' }); assert.equal(d.sats, 2100); assert.equal(d.expired, false);

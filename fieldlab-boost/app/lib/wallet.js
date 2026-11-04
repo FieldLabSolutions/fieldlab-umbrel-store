@@ -3,14 +3,31 @@ const fs = require('fs'), path = require('path'), crypto = require('crypto');
 // First-run wallet setup and on-chain funding / channel-open for the app's own LND.
 // The seed only ever lives in memory between /seed and /init, and is never logged or written.
 const PEERS = [
-  { id: 'acinq', name: 'ACINQ', uri: '03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f@3.33.236.230:9735', minSats: null,
-    note: 'Source: 1ml.com / lightningnetwork.plus (checked 2026-11-04). Minimum channel size not published.' },
-  { id: 'kraken', name: 'Kraken', uri: '02437c00ef5de2686a6bd60f8acb5c83d17010916010a15f479d5ef84c04f04485@67.208.234.136:9735', minSats: 1000000,
+  { id: 'acinq', name: 'ACINQ', uri: '03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f@3.33.236.230:9735', minSats: 1000000, minVerified: false,
+    note: 'Source: 1ml.com / lightningnetwork.plus (checked 2026-11-04). Minimum not published by ACINQ; research reports they refuse channels under 1,000,000 sats (unverified).' },
+  { id: 'kraken', name: 'Kraken', uri: '02437c00ef5de2686a6bd60f8acb5c83d17010916010a15f479d5ef84c04f04485@67.208.234.136:9735', minSats: 1000000, minVerified: true,
     note: 'Source: support.kraken.com (updated 2026-08-19). Kraken requires at least 1,000,000 sats.' },
 ];
 const READY = ['RPC_ACTIVE', 'SERVER_ACTIVE'];
-const LND_MIN = 20000, FEE_BUFFER = 5000, MIN_CONFS = 3, RECOVERY_WINDOW = 2500;
-const RESET_PHRASE = 'RESET WALLET';
+const LND_MIN = 20000, ANCHOR_RESERVE = 10000, MIN_CONFS = 3, RECOVERY_WINDOW = 2500;
+const FEE_TARGETS = [['slow', 'Slow', 144], ['normal', 'Normal', 6], ['fast', 'Fast', 2]];
+// Funding tx size estimate (vbytes): overhead 11 + P2WPKH/P2TR input ~68 each + P2WSH funding output 43 + change ~31.
+const txVbytes = (inputs, change = true) => 11 + 68 * Math.max(1, inputs) + 43 + (change ? 31 : 0);
+// Fewest 3-conf UTXOs (largest first) covering amount + fee + reserve. Returns { inputs, fee } or null.
+function planInputs(utxos, sats, rate) {
+  const sorted = [...utxos].sort((a, b) => b - a); let sum = 0;
+  for (let i = 0; i < sorted.length; i++) { sum += sorted[i]; const fee = Math.ceil(txVbytes(i + 1) * rate); if (sum >= sats + fee + ANCHOR_RESERVE) return { inputs: i + 1, fee }; }
+  return null;
+}
+function maxFundable(utxos, rate) {
+  const total = utxos.reduce((a, b) => a + b, 0);
+  return Math.max(0, total - ANCHOR_RESERVE - Math.ceil(txVbytes(utxos.length, true) * rate));
+}
+function checkRate(r) {
+  r = Number(r);
+  if (!Number.isInteger(r) || r < 1 || r > 500) throw new Error('Fee rate must be a whole number of sat/vB between 1 and 500');
+  return r;
+}
 
 // 24 aezeed words: lowercase a-z only. Never echo the input back in errors.
 function cleanWords(input) {
@@ -24,13 +41,13 @@ function cleanWords(input) {
 // Wallet files live in the lnd container's dir (mounted here at dirname(walletPasswordPath)).
 function walletPaths(cfg) {
   const lndDir = path.dirname(cfg.walletPasswordPath), chainDir = path.dirname(cfg.lnd.adminMacaroonPath);
-  return { lndDir, chainDir, marker: path.join(lndDir, 'RESET_PENDING'), scb: path.join(chainDir, 'channel.backup'), scbDir: path.join(lndDir, 'channel-backup') };
+  return { lndDir, chainDir, scb: path.join(chainDir, 'channel.backup'), scbDir: path.join(lndDir, 'channel-backup') };
 }
 const scrub = (msg, words) => words.reduce((m, w) => m.split(w).join('…'), String(msg));
 
 function parseUri(uri) {
   const m = String(uri || '').trim().match(/^(0[23][0-9a-f]{64})@([a-z0-9.\-]+|\[[0-9a-f:]+\]):(\d{1,5})$/i);
-  if (!m) throw new Error('Peer must look like pubkey@host:port');
+  if (!m || Number(m[3]) < 1 || Number(m[3]) > 65535) throw new Error('Peer must look like pubkey@host:port (IP, DNS name or .onion)');
   return { pubkey: m[1].toLowerCase(), host: `${m[2]}:${m[3]}` };
 }
 
@@ -40,7 +57,6 @@ function createWallet({ lnd, cfg, history }) {
   const wipe = () => { if (pending) pending.words.fill(''); pending = null; };
   const P = walletPaths(cfg);
   let lastDownload = null;
-  const resetPending = () => fs.existsSync(P.marker);
 
   // Surface LND's own channel.backup and keep a copy in data/lnd/channel-backup/ when it changes.
   function scbInfo() {
@@ -60,13 +76,12 @@ function createWallet({ lnd, cfg, history }) {
   }
 
   async function status() {
-    if (resetPending()) return { state: 'RESET_PENDING', ready: false, resetPending: true, dryRun: cfg.dryRun };
     const state = await lnd.state();
     const out = { state, ready: READY.includes(state), dryRun: cfg.dryRun, unlockFile: fs.existsSync(cfg.walletPasswordPath), backup: { ...scbInfo(), lastDownload } };
     if (!out.ready) return out;
     const [wb, cb, utxos, pend, ch] = await Promise.all([lnd.walletBalance(), lnd.channelBalance(), lnd.listUnspent(MIN_CONFS), lnd.pendingChannels(), lnd.listChannels()]);
     out.onchain = { confirmed: Number(wb.confirmed_balance || 0), unconfirmed: Number(wb.unconfirmed_balance || 0),
-      spendable3: (utxos.utxos || []).reduce((a, u) => a + Number(u.amount_sat || 0), 0) };
+      spendable3: (utxos.utxos || []).reduce((a, u) => a + Number(u.amount_sat || 0), 0), utxos3: (utxos.utxos || []).map(u => Number(u.amount_sat || 0)).filter(x => x > 0) };
     out.lightning = { local: Number(cb.local_balance?.sat ?? cb.balance ?? 0), remote: Number(cb.remote_balance?.sat ?? 0) };
     out.channels = (ch.channels || []).length; out.pendingOpen = (pend.pending_open_channels || []).length;
     out.pendingAny = pendingCount(pend);
@@ -84,9 +99,8 @@ function createWallet({ lnd, cfg, history }) {
       try {
         words = cleanWords(b.words);
         const pass = String(b.passphrase || '');
-        if (resetPending()) throw new Error('Reset pending: restart the app in Umbrel first');
         const state = await lnd.state();
-        if (state !== 'NON_EXISTING') throw new Error(state === 'UNREACHABLE' ? 'Wallet node is still starting, try again in a minute' : 'A wallet already exists. Reset it first.');
+        if (state !== 'NON_EXISTING') throw new Error(state === 'UNREACHABLE' ? 'Wallet node is still starting, try again in a minute' : 'A wallet already exists');
         wipe();
         pwText = await writePassword();
         await lnd.restoreWallet(pwText, words, pass, RECOVERY_WINDOW);
@@ -94,27 +108,6 @@ function createWallet({ lnd, cfg, history }) {
       finally { words.fill(''); if (pwText) pwText.fill(0); if (Array.isArray(b.words)) b.words.fill(''); b.words = null; b.passphrase = null; }
       history.add({ kind: 'wallet', status: 'restored' });
       return { ok: true, recoveryWindow: RECOVERY_WINDOW };
-    },
-    // Reset never deletes while LND runs: it writes RESET_PENDING; the lnd entrypoint wipes on next start.
-    async reset(b) {
-      if (String(b.phrase || '') !== RESET_PHRASE) throw new Error(`Type ${RESET_PHRASE} exactly`);
-      const override = b.override === true;
-      const state = await lnd.state(), reasons = [];
-      if (READY.includes(state)) {
-        const [wb, cb, ch, pend] = await Promise.all([lnd.walletBalance(), lnd.channelBalance(), lnd.listChannels(), lnd.pendingChannels()]);
-        const n = (ch.channels || []).length, pn = pendingCount(pend);
-        const onchain = Number(wb.total_balance ?? (Number(wb.confirmed_balance || 0) + Number(wb.unconfirmed_balance || 0)));
-        const ln = Number(cb.local_balance?.sat ?? cb.balance ?? 0) + Number(cb.pending_open_local_balance?.sat ?? 0);
-        if (n || pn) throw new Error(`Refused: ${n} open and ${pn} pending channel(s). Close them first; reset would lose those funds without the channel backup.`);
-        if (onchain > 0) reasons.push(`${onchain.toLocaleString()} sats on-chain`);
-        if (ln > 0) reasons.push(`${ln.toLocaleString()} sats in Lightning`);
-      } else if (state !== 'NON_EXISTING') reasons.push(`wallet is ${state.toLowerCase()} so balances can't be checked`);
-      if (reasons.length && !override) throw new Error(`Refused: ${reasons.join(', ')}. Tick "I understand this wallet has funds" to reset anyway.`);
-      fs.writeFileSync(P.marker, new Date().toISOString() + '\n', { mode: 0o600 });
-      try { fs.rmSync(cfg.lnd.macaroonPath, { force: true }); } catch {}
-      lnd.forgetMacaroon(); wipe();
-      history.add({ kind: 'wallet', status: 'reset-pending', override: !!reasons.length });
-      return { ok: true, restartRequired: true };
     },
     async backupDownload() {
       const r = await lnd.exportBackup();
@@ -159,19 +152,44 @@ function createWallet({ lnd, cfg, history }) {
       const r = await lnd.newAddress();
       return { address: r.address, uri: 'bitcoin:' + r.address };
     },
+    // Fee presets from LND's estimator (sat/kw -> sat/vB). Null when LND can't estimate (user types a custom rate).
+    async fees() {
+      const presets = await Promise.all(FEE_TARGETS.map(async ([id, label, conf]) => {
+        try { const r = await lnd.estimateFee(conf); const kw = Number(r.sat_per_kw || 0); return { id, label, conf, satPerVbyte: kw > 0 ? Math.max(1, Math.ceil(kw * 4 / 1000)) : null }; }
+        catch { return { id, label, conf, satPerVbyte: null }; }
+      }));
+      const s = await status();
+      return { presets, reserve: ANCHOR_RESERVE, minSats: LND_MIN, minConfs: MIN_CONFS, spendable: s.ready ? s.onchain.spendable3 : 0, utxos: s.ready ? s.onchain.utxos3.length : 0 };
+    },
+    async max(b) {
+      const rate = checkRate(b.feeRate);
+      const s = await status(); if (!s.ready) throw new Error('Wallet not ready');
+      const max = maxFundable(s.onchain.utxos3, rate);
+      return { max, spendable: s.onchain.spendable3, reserve: ANCHOR_RESERVE, estFeeSats: Math.ceil(txVbytes(s.onchain.utxos3.length) * rate), feeRate: rate };
+    },
     async preview(b) {
       const { pubkey, host } = parseUri(b.peer);
       const sats = Math.floor(Number(b.sats));
       if (!(sats >= LND_MIN)) throw new Error(`Minimum channel is ${LND_MIN.toLocaleString()} sats`);
-      const preset = PEERS.find(p => p.uri.startsWith(pubkey));
-      const warnings = [];
-      if (preset?.minSats && sats < preset.minSats) warnings.push(`${preset.name} needs at least ${preset.minSats.toLocaleString()} sats; it will likely reject this.`);
-      const isPrivate = b.private !== false;
-      if (!isPrivate) warnings.push('Public channel: it will be announced on the network graph.');
+      const rate = checkRate(b.feeRate);
       const s = await status();
       if (!s.ready) throw new Error('Wallet not ready');
-      if (s.onchain.spendable3 < sats + FEE_BUFFER) throw new Error(`Need ${(sats + FEE_BUFFER).toLocaleString()} sats with ${MIN_CONFS}+ confirmations (incl. fee buffer); you have ${s.onchain.spendable3.toLocaleString()}`);
-      const plan = { id: crypto.randomBytes(8).toString('hex'), created: Date.now(), pubkey, host, sats, isPrivate, peerName: preset?.name || 'Custom peer' };
+      const spendable = s.onchain.spendable3;
+      if (sats > spendable) throw new Error(`Amount is more than your ${spendable.toLocaleString()} sats with ${MIN_CONFS}+ confirmations`);
+      const pick = planInputs(s.onchain.utxos3, sats, rate);
+      if (!pick) { const max = maxFundable(s.onchain.utxos3, rate); throw new Error(`Need amount + on-chain fee + ${ANCHOR_RESERVE.toLocaleString()} sat reserve with ${MIN_CONFS}+ confirmations. Max at ${rate} sat/vB is ${max.toLocaleString()} sats`); }
+      const preset = PEERS.find(p => p.uri.startsWith(pubkey + '@'));
+      const warnings = [];
+      if (preset?.minSats && sats < preset.minSats) warnings.push(preset.minVerified
+        ? `${preset.name} needs at least ${preset.minSats.toLocaleString()} sats; it will likely reject this.`
+        : `${preset.name} reportedly refuses channels under ${preset.minSats.toLocaleString()} sats (unverified); it will likely reject this.`);
+      if (!preset) warnings.push('Custom peer: its minimum channel size is unknown (unverified). It may reject the channel.');
+      else if (!preset.minVerified && !(preset.minSats && sats < preset.minSats)) warnings.push(`${preset.name}'s minimum channel size is unverified.`);
+      const isPrivate = b.private !== false;
+      if (!isPrivate) warnings.push('Public channel: it will be announced on the network graph.');
+      if (rate === 1) warnings.push('1 sat/vB may take a long time to confirm.');
+      const plan = { id: crypto.randomBytes(8).toString('hex'), created: Date.now(), pubkey, host, sats, isPrivate, feeRate: rate, estFeeSats: pick.fee, inputs: pick.inputs,
+        peerName: preset?.name || 'Custom peer', remainingSats: spendable - sats - pick.fee, reserve: ANCHOR_RESERVE, minConfs: MIN_CONFS };
       plans.set(plan.id, plan);
       return { ...plan, warnings, dryRun: cfg.dryRun };
     },
@@ -180,15 +198,21 @@ function createWallet({ lnd, cfg, history }) {
       const plan = plans.get(b.planId);
       if (!plan || Date.now() - plan.created > 10 * 60e3) throw new Error('Preview expired, preview again');
       plans.delete(plan.id);
-      let status = 'dry-run', txid;
+      let status = 'dry-run', txid, pending = null;
       if (!cfg.dryRun) {
-        try { await lnd.connectPeer(plan.pubkey, plan.host); } catch (e) { if (!/already connected/i.test(e.message)) throw e; }
+        const peers = await lnd.listPeers().catch(() => ({ peers: [] }));
+        if (!(peers.peers || []).some(p => p.pub_key === plan.pubkey)) {
+          try { await lnd.connectPeer(plan.pubkey, plan.host); } catch (e) { if (!/already connected/i.test(e.message)) throw new Error('Could not connect to peer: ' + e.message); }
+        }
         const r = await lnd.openChannel(plan);
         txid = r.funding_txid_str || (r.funding_txid_bytes ? Buffer.from(r.funding_txid_bytes, 'base64').reverse().toString('hex') : undefined);
         status = 'opening';
+        try { const pc = await lnd.pendingChannels(); const m = (pc.pending_open_channels || []).find(x => x.channel?.remote_node_pub === plan.pubkey);
+          pending = m ? { capacity: Number(m.channel.capacity || 0), channelPoint: m.channel.channel_point || null, confirmationsNeeded: m.confirmations_until_active ?? null } : null; } catch {}
       }
-      return history.add({ kind: 'channel', dryRun: cfg.dryRun, peer: plan.peerName, sats: plan.sats, private: plan.isPrivate, status, txid });
+      const entry = history.add({ kind: 'channel', dryRun: cfg.dryRun, peer: plan.peerName, sats: plan.sats, private: plan.isPrivate, feeRate: plan.feeRate, status, txid });
+      return { ...entry, pending, backupReminder: !cfg.dryRun };
     },
   };
 }
-module.exports = { createWallet, parseUri, cleanWords, walletPaths, PEERS, READY, RESET_PHRASE };
+module.exports = { createWallet, parseUri, cleanWords, walletPaths, planInputs, maxFundable, txVbytes, PEERS, READY, ANCHOR_RESERVE };

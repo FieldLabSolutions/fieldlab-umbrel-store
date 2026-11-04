@@ -34,8 +34,6 @@
     <div id="restoreCount" class="small muted">0 / 24 words</div>
     <label>Seed passphrase (optional, only if you set one)<input id="restorePass" type="password" autocomplete="off"></label>
     <button id="btnRestore" class="primary">Restore wallet</button><button id="btnRestoreCancel">Cancel</button></div>
-  <div id="wRestart" class="card hidden"><h2 class="bad">Restart the app in Umbrel now</h2>
-    <p>Wallet reset is pending. Open Umbrel, long-press <b>Dirty Boost Whore</b> → <b>Restart</b>. On restart the old wallet is wiped (a copy of its channel backup is kept in <span class="mono">data/lnd/channel-backup/</span>), then this tab offers Create or Restore.</p></div>
   <div id="wSeed" class="card hidden"><h2>Write these 24 words down</h2><p class="small bad">On paper. No photos, screenshots, chat or cloud.</p>
     <ol id="seedWords" class="seed"></ol>
     <label class="check"><input type="checkbox" id="seedOk"> I wrote them down, in order</label>
@@ -48,13 +46,21 @@
       <div class="small muted"><span id="wChecked"></span> · auto-refresh every 30s <button id="btnActRefresh">Refresh</button></div></div>
     <div class="card"><h2>Add funds (on-chain)</h2><p class="small">Send bitcoin from Strike or any wallet. Channels need 3 confirmations.</p>
       <button id="btnAddr">Show deposit address</button><div id="addrOut"></div></div>
-    <div class="card"><h2>Open a channel</h2>
-      <label>Peer<select id="peerSel"></select></label>
-      <input id="peerCustom" class="hidden" placeholder="pubkey@host:port">
-      <div id="peerNote" class="small muted"></div>
-      <label>Amount (sats)<input id="chanSats" type="number" inputmode="numeric" value="500000"></label>
-      <label class="check"><input type="checkbox" id="chanPrivate" checked> Private (unannounced) channel</label>
-      <button id="btnChanPreview" class="primary">Review channel</button><div id="chanPreview"></div></div>
+    <div class="card wide" id="chanCard"><h2>Open a channel</h2>
+      <div id="chanForm">
+        <label>Peer<select id="peerSel"></select></label>
+        <input id="peerCustom" class="hidden mono" placeholder="pubkey@host:port (IP, DNS or .onion)" autocomplete="off" autocapitalize="none" spellcheck="false">
+        <div id="peerNote" class="small muted"></div>
+        <label>Amount (sats)<span class="row"><input id="chanSats" type="number" inputmode="numeric" min="20000" step="1" value="500000"><button id="btnChanMax" type="button">Max</button></span></label>
+        <div id="chanAvail" class="small muted"></div>
+        <fieldset class="fees"><legend>On-chain fee</legend>
+          <div id="feePresets" class="small muted">Loading fee estimates…</div>
+          <label class="check"><input type="radio" name="feeSel" value="custom" id="feeCustomSel"> Custom <input id="feeCustom" type="number" inputmode="numeric" min="1" max="500" step="1" placeholder="sat/vB" style="width:7em"> sat/vB</label>
+        </fieldset>
+        <label class="check"><input type="checkbox" id="chanPrivate" checked> Private (unannounced) channel</label>
+        <p class="small muted">Uses only coins with 3+ confirmations (min_confs 3, no unconfirmed). Keeps ~10,000 sats on-chain as the anchor fee-bump reserve. Minimum 20,000 sats.</p>
+        <button id="btnChanPreview" class="primary">Review channel</button></div>
+      <div id="chanPreview"></div></div>
     <div class="card"><h2>Channel backup</h2>
       <div id="scbBanner" class="warn hidden">You have channels but haven't downloaded a channel backup in this session.</div>
       <p class="small"><b>Download the channel backup after opening, closing, or changing channels, and store it off this box.</b></p>
@@ -64,11 +70,6 @@
       <details><summary class="small">Restore channels from a backup file (after a wallet restore)</summary>
         <input id="scbFile" type="file" accept=".backup,application/octet-stream"><button id="btnScbRestore">Restore channels from file</button></details></div>
   </div>
-  <div id="wDanger" class="card danger-zone hidden"><h2 class="bad">Danger zone: Reset wallet</h2>
-    <p class="small bad">This erases the wallet from this app. Funds can only be recovered with your 24 words. Open channels would be lost (the app refuses while any exist).</p>
-    <label>Type <b>RESET WALLET</b> to confirm<input id="resetPhrase" autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
-    <label class="check"><input type="checkbox" id="resetOverride"> I understand this wallet has funds</label>
-    <button id="btnReset" class="danger">Reset wallet</button></div>
 </section>
 </main><div id="toast" class="hidden"></div>
 <script src="vendor/qrcode.js"></script><script src="app.js"></script></body></html>

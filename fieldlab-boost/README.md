@@ -1,4 +1,4 @@
-# Dirty Boost Whore (v0.3.0) — local-only Umbrel app with its own Lightning wallet
+# Dirty Boost Whore (v0.4.0) — local-only Umbrel app with its own Lightning wallet
 
 > ## ⚠️ UNINSTALLING THIS APP DELETES ITS WALLET AND SEED
 > The boost wallet lives in `~/umbrel/app-data/fieldlab-boost/data/lnd`. Umbrel deletes that folder on uninstall.
@@ -15,10 +15,25 @@ Phone-friendly dark web UI for the Umbrel LND node:
 - **History**: `/data/history.json`. Node balance/channel summary at the top.
 
 Runs on stock `node:20-alpine` with the app folder mounted; no npm deps (QR lib vendored, MIT).
-**`DRY_RUN=true` is the default** — no sats move until it is set to `"false"`. `MAX_PAYMENT_SATS` caps any single action (default 50,000).
+**The Umbrel compose sets `DRY_RUN="false"` (live).** With `DRY_RUN=true` boosts, payments and channel opens only simulate. `MAX_PAYMENT_SATS` caps any single action (default 50,000).
 
 
-## What's new in 0.3.0: restore, reset, channel backup (Wallet tab)
+## What's new in 0.4.0
+- **Open a channel page** (Wallet tab): peer picker (ACINQ / Kraken presets, or paste any `pubkey@host:port`, incl. `.onion`);
+  amount in sats with **Max** (`POST /api/channel/max`: 3-conf spendable − ~10,000 sat anchor reserve − estimated fee);
+  fee **Slow / Normal / Fast** from LND `GET /v2/wallet/estimatefee/{144|6|2}` (sat/kw → sat/vB) or a custom 1–500 sat/vB;
+  private by default. **Review** shows peer, amount, fee rate, estimated on-chain fee (vbyte estimate, not LND's exact
+  figure), private flag, remaining on-chain balance, and warnings (Kraken min 1,000,000 verified; ACINQ reported
+  ≥1,000,000, **unverified**; custom peers' minimum unknown). Server checks: valid URI, ≥ 20,000 sats, ≤ 3-conf spendable,
+  amount + fee + reserve fits. **Confirm** → `GET /v1/peers`, `POST /v1/peers` if not connected, then `POST /v1/channels`
+  with `node_pubkey`, `node_pubkey_string`, `local_funding_amount`, `private`, `sat_per_vbyte`, `min_confs: 3`,
+  `spend_unconfirmed: false`. Afterwards shows the funding txid, pending status (`/v1/channels/pending`) and a
+  download-the-channel-backup reminder. With `DRY_RUN=true` it only simulates.
+- **Wallet reset removed** (UI card, `POST /api/wallet/reset`, and the `RESET_PENDING` wipe in the lnd entrypoint).
+  To start over, uninstall/reinstall the app and restore from the 24 words.
+- Boosts: `app_name: "Dirty Boost Whore"` and `app_version` (package version) in record 7629169 on every keysend.
+
+## 0.3.0: restore, channel backup (Wallet tab)
 **What each backup recovers:** the 24 words recover **on-chain funds only**. Channel funds need the
 **channel backup** (SCB). Download it after opening, closing, or changing channels, and store it off this box.
 
@@ -28,25 +43,12 @@ Runs on stock `node:20-alpine` with the app folder mounted; no npm deps (QR lib 
   `wallet-password` (600, same as create) and calls `POST /v1/initwallet` with `cipher_seed_mnemonic`,
   `aezeed_passphrase` (if given) and `recovery_window: 2500`. The tab then shows sync status/block height
   (`/v1/getinfo`), rescan progress (`/v1/getrecoveryinfo`) and balances, refreshing every 15 s until done.
-- **Reset wallet** (separate danger zone): type `RESET WALLET`. The server **refuses** if LND reports any open or
-  pending channel (`/v1/channels`, `/v1/channels/pending`, incl. closing/force-closing), and refuses if there is any
-  on-chain or Lightning balance (or the wallet is locked, so it can't check) unless the
-  "I understand this wallet has funds" box is ticked.
-  - **Design: marker file, wipe on next start.** LND holds `wallet.db`/`macaroons.db` open, so deleting them
-    while it runs is unsafe (it can rewrite them, and it keeps serving the old wallet until restarted). The web app
-    therefore only writes `data/lnd/RESET_PENDING`, deletes its own `boost-node.macaroon`, and blocks all
-    authenticated LND calls. The UI shows **"Restart the app in Umbrel now"** (the app cannot restart containers).
-  - On the next start the `lnd` container entrypoint (docker-compose.yml) sees the marker, copies
-    `channel.backup` to `data/lnd/channel-backup/pre-reset-<time>.backup`, removes `data/chain` (wallet.db,
-    macaroons.db, macaroons, channel.backup), `data/graph` and `wallet-password`, deletes the marker, then starts LND
-    with no wallet. `tls.cert`/`tls.key` are kept.
 - **Channel backup:** "Download channel backup" → `GET /api/backup/download` → LND `GET /v1/channels/backup`,
   served as binary `dirty-boost-channels-<YYYY-MM-DD>.backup` (the raw multi-channel backup). After a wallet restore,
   upload it under "Restore channels from a backup file" → `POST /v1/channels/backup/restore` with
   `multi_chan_backup` (asks for a confirm). The tab shows when LND's own `channel.backup` last changed, keeps a copy in
   `data/lnd/channel-backup/channel-latest.backup` when it changes, and shows a warning banner when channels exist and
   no backup was downloaded in this browser session.
-- Unchanged: `DRY_RUN=true` default, boosts, pay, invoices, create-wallet flow.
 
 ## What's new in 0.2.0: one app, two containers
 | Container | What it is |
@@ -83,13 +85,11 @@ app/test/                unit + e2e + wallet tests, mock LND
    `info:read offchain:read/write invoices:read/write onchain:read/write address:read/write peers:read/write`. All later calls use only that.
 5. **Deposit:** "Show deposit address" → `GET /v1/newaddress?type=WITNESS_PUBKEY_HASH` → `bitcoin:` QR + copy. Balances card: on-chain confirmed / unconfirmed / spendable with ≥3 confs (`/v1/utxos?min_confs=3`), Lightning can-send / can-receive.
 6. Send on-chain from Strike (or anywhere). Wait for 3 confirmations.
-7. **Open channel:** pick ACINQ, Kraken, or custom `pubkey@host:port`; amount default 500,000; **Private** ticked by default.
-   "Review channel" checks: valid URI, ≥ 20,000 sats, ≥3-conf funds ≥ amount + 5,000 sat fee buffer; warns if Kraken < 1,000,000 or if public.
-   "Open" asks a second confirm, then `POST /v1/peers` (over Tor) and `POST /v1/channels` with `private, min_confs: 3, spend_unconfirmed: false, target_conf: 6`. In **DRY_RUN** nothing is sent.
+7. **Open channel:** see "What's new in 0.4.0" (peer, amount/Max, fee preset or custom sat/vB, private default, review, confirm). In **DRY_RUN** nothing is sent.
 8. Once the channel is active, boosts/pay draw from this wallet only (outbound = what you funded). Back up `data/lnd/data/chain/bitcoin/mainnet/channel.backup` after each open.
 
 ### Peer presets (checked 2026-11-04)
-- ACINQ `03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f@3.33.236.230:9735` — 1ml.com, lightningnetwork.plus, Electrum trampoline list. Minimum channel size **not found**.
+- ACINQ `03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f@3.33.236.230:9735` — 1ml.com, lightningnetwork.plus, Electrum trampoline list. Minimum not published; research reports ACINQ refuses channels under **1,000,000 sats** (unverified).
 - Kraken `02437c00ef5de2686a6bd60f8acb5c83d17010916010a15f479d5ef84c04f04485@67.208.234.136:9735` — support.kraken.com (2026-08-19). **Minimum 1,000,000 sats.** Old key 02f1a8…0b69 is dead.
 
 ## Macaroon choice
@@ -100,11 +100,11 @@ The app bakes its own macaroon from `admin.macaroon` (it has to: nothing else ex
 
 ## Config (docker-compose `web` env)
 `LND_REST=https://${APP_BOOST_LND_IP}:${APP_BOOST_LND_REST_PORT}` (10.21.21.91:8080), `TLS_CERT_PATH=/data/lnd/tls.cert`, `MACAROON_PATH=/data/boost-node.macaroon`,
-`ADMIN_MACAROON_PATH=/data/lnd/data/chain/bitcoin/${APP_BOOST_NETWORK}/admin.macaroon`, `WALLET_PASSWORD_FILE=/data/lnd/wallet-password`, `DRY_RUN="true"`, `SENDER_NAME=""`, `MAX_PAYMENT_SATS=50000`.
+`ADMIN_MACAROON_PATH=/data/lnd/data/chain/bitcoin/${APP_BOOST_NETWORK}/admin.macaroon`, `WALLET_PASSWORD_FILE=/data/lnd/wallet-password`, `DRY_RUN="false"`, `SENDER_NAME=""`, `MAX_PAYMENT_SATS=50000`.
 
 ## Tests
 ```
-cd app && npm test        # 12 tests: unit, e2e boost/pay/invoice (dry + live, router send), wallet setup, channel open (dry + live)
+cd app && npm test        # 19 tests: unit (incl. app_name), e2e boost/pay/invoice, wallet setup/restore, channel open form (dry + live), fees, backup, reset removed
 ```
 The wallet test asserts: uninitialised summary is not an error; confirm + correct check word required; one-shot setup; password file is 600 and matches what LND got;
 macaroon baked exactly once (even with concurrent calls) with no `macaroon:*`/`signer:*`; app calls don't use admin; seed words and password appear nowhere on disk or in logs.

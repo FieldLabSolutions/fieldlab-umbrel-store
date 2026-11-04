@@ -2,11 +2,13 @@
 const crypto = require('crypto');
 const KEYSEND_PREIMAGE = '5482373484';
 const BOOSTAGRAM = '7629169';
+const APP_NAME = 'Dirty Boost Whore';
+const APP_VERSION = require('../package.json').version;
 function buildBoostRecord(o) {
   return {
     podcast: o.podcast, feedID: o.feedID, guid: o.podcastGuid, url: o.feedUrl,
     episode: o.episode, episode_guid: o.episodeGuid, action: 'boost',
-    app_name: 'Dirty Boost Whore', app_version: '0.1.0',
+    app_name: APP_NAME, app_version: APP_VERSION,
     value_msat: o.valueMsat, value_msat_total: o.valueMsatTotal,
     sender_name: o.senderName, message: o.message, name: o.recipientName,
     ts: o.ts,
@@ -30,4 +32,4 @@ function buildKeysend({ dest, sats, boost, customKey, customValue, preimage }) {
     preimageHex: pre.toString('hex'), paymentHashHex: hash.toString('hex'),
   };
 }
-module.exports = { buildKeysend, buildBoostRecord, KEYSEND_PREIMAGE, BOOSTAGRAM };
+module.exports = { buildKeysend, buildBoostRecord, KEYSEND_PREIMAGE, BOOSTAGRAM, APP_NAME };

@@ -103,12 +103,10 @@ $('btnRemoveSaved').onclick = guard(async () => {
   const s = savedList[$('saved').value]; if (!s || !confirm(`Remove ${s.name} from my podcasts?`)) return;
   await api('shows/remove', { feedUrl: s.feedUrl }); await loadSaved();
 });
-let setup = null, peers = [], chanPlan = null;
+let setup = null, peers = [], chanPlan = null, feeInfo = null;
 async function loadWallet() {
   const w = await api('wallet');
-  ['wSetup', 'wSeed', 'wReady', 'wRestore', 'wRestart', 'wDanger'].forEach(id => $(id).classList.add('hidden'));
-  if (w.resetPending) { $('wState').innerHTML = '<span class="bad">Reset pending: restart the app in Umbrel now.</span>'; $('wRestart').classList.remove('hidden'); return; }
-  if (w.state !== 'NON_EXISTING' && w.state !== 'UNREACHABLE') $('wDanger').classList.remove('hidden');
+  ['wSetup', 'wSeed', 'wReady', 'wRestore'].forEach(id => $(id).classList.add('hidden'));
   if (w.state === 'NON_EXISTING') { $('wState').innerHTML = 'No boost wallet yet.'; if (setup) $('wSeed').classList.remove('hidden'); else $('wSetup').classList.remove('hidden'); return; }
   if (!w.ready) { $('wState').innerHTML = w.state === 'UNREACHABLE' ? 'Wallet node is starting… try again in a minute.' : `Wallet is ${esc(w.state.toLowerCase())}…` + (w.unlockFile ? '' : ' <span class="bad">(no unlock file)</span>'); return; }
   const sy = w.sync ? (w.sync.synced ? ` · <span class="ok">synced</span> at block ${fmt(w.sync.height)}` : ` · <span class="bad">syncing</span> (block ${fmt(w.sync.height)})`) : '';
@@ -122,8 +120,28 @@ async function loadWallet() {
   $('wReady').classList.remove('hidden');
   guard(loadActivity)(); syncActivityTimer();
   if (!peers.length) { const p = await api('channel/peers'); peers = p.peers; $('chanSats').value = p.defaultSats;
-    $('peerSel').innerHTML = peers.map((x, i) => `<option value="${i}">${esc(x.name)}</option>`).join('') + '<option value="custom">Custom pubkey@host…</option>'; syncPeer(); }
+    $('peerSel').innerHTML = peers.map((x, i) => `<option value="${i}">${esc(x.name)}</option>`).join('') + '<option value="custom">Paste any node (pubkey@host:port)…</option>'; syncPeer(); }
+  guard(loadFees)();
 }
+async function loadFees() {
+  feeInfo = await api('channel/fees');
+  const cur = document.querySelector('input[name=feeSel]:checked')?.value || 'normal';
+  $('feePresets').innerHTML = feeInfo.presets.map(p => `<label class="check"><input type="radio" name="feeSel" value="${p.id}" ${p.satPerVbyte ? '' : 'disabled'} ${p.id === cur && p.satPerVbyte ? 'checked' : ''}> ${esc(p.label)} (~${p.conf} blocks): <b>${p.satPerVbyte ? p.satPerVbyte + ' sat/vB' : 'no estimate'}</b></label>`).join('');
+  if (!document.querySelector('input[name=feeSel]:checked')) { const f = document.querySelector('input[name=feeSel]:not([disabled])'); if (f) f.checked = true; }
+  $('chanAvail').textContent = `Spendable with 3+ conf: ${fmt(feeInfo.spendable)} sats (${feeInfo.utxos} coin${feeInfo.utxos === 1 ? '' : 's'})`;
+}
+function feeRate() {
+  const sel = document.querySelector('input[name=feeSel]:checked')?.value;
+  if (!sel) throw new Error('Pick a fee');
+  if (sel === 'custom') { const r = Number($('feeCustom').value); if (!Number.isInteger(r) || r < 1 || r > 500) throw new Error('Custom fee must be 1 to 500 sat/vB'); return r; }
+  const p = feeInfo?.presets.find(x => x.id === sel); if (!p?.satPerVbyte) throw new Error('No estimate for that fee, use Custom'); return p.satPerVbyte;
+}
+$('feeCustom').oninput = () => { $('feeCustomSel').checked = true; };
+$('btnChanMax').onclick = guard(async () => {
+  const m = await api('channel/max', { feeRate: feeRate() });
+  $('chanSats').value = m.max;
+  $('chanAvail').textContent = `Max ${fmt(m.max)} sats = ${fmt(m.spendable)} spendable − ~${fmt(m.estFeeSats)} fee at ${m.feeRate} sat/vB − ${fmt(m.reserve)} reserve`;
+});
 // Wallet activity: one 30s timer, only while the Wallet tab is shown and the page is visible.
 let actTimer = null;
 const walletVisible = () => !document.hidden && !$('tab-wallet').classList.contains('hidden') && !$('wReady').classList.contains('hidden');
@@ -167,14 +185,29 @@ $('btnAddr').onclick = guard(async () => {
 });
 $('btnChanPreview').onclick = guard(async () => {
   const v = $('peerSel').value;
-  chanPlan = await api('channel/preview', { peer: v === 'custom' ? $('peerCustom').value : peers[v].uri, sats: Number($('chanSats').value), private: $('chanPrivate').checked });
-  $('chanPreview').innerHTML = `<h2>Confirm channel</h2>${chanPlan.warnings.map(w => `<div class="warn">${esc(w)}</div>`).join('')}<p>Peer: <b>${esc(chanPlan.peerName)}</b><br><span class="mono">${esc(chanPlan.pubkey.slice(0, 16))}…@${esc(chanPlan.host)}</span><br>Amount: <b>${fmt(chanPlan.sats)} sats</b> + on-chain fee<br>${chanPlan.isPrivate ? 'Private (unannounced)' : '<span class="bad">Public</span>'}</p>
-    <button id="btnChanOpen" class="primary">${chanPlan.dryRun ? 'Open (dry run)' : 'Open channel for ' + fmt(chanPlan.sats) + ' sats'}</button><button id="btnChanCancel">Cancel</button>`;
-  $('btnChanCancel').onclick = () => { $('chanPreview').innerHTML = ''; };
+  const peer = v === 'custom' ? $('peerCustom').value.trim() : peers[v].uri;
+  chanPlan = await api('channel/preview', { peer, sats: Number($('chanSats').value), feeRate: feeRate(), private: $('chanPrivate').checked });
+  const c = chanPlan;
+  $('chanForm').classList.add('hidden');
+  $('chanPreview').innerHTML = `<h2>Review channel</h2>${c.warnings.map(w => `<div class="warn">${esc(w)}</div>`).join('')}
+    <table><tr><td>Peer</td><td><b>${esc(c.peerName)}</b><br><span class="mono small">${esc(c.pubkey.slice(0, 16))}…@${esc(c.host)}</span></td></tr>
+    <tr><td>Channel amount</td><td class="r"><b>${fmt(c.sats)} sats</b></td></tr>
+    <tr><td>Fee rate</td><td class="r">${fmt(c.feeRate)} sat/vB</td></tr>
+    <tr><td>Est. on-chain fee</td><td class="r">~${fmt(c.estFeeSats)} sats (${c.inputs} input${c.inputs === 1 ? '' : 's'}, estimate)</td></tr>
+    <tr><td>Visibility</td><td class="r">${c.isPrivate ? 'Private (unannounced)' : '<span class="bad">Public</span>'}</td></tr>
+    <tr><td>Coins used</td><td class="r">${c.minConfs}+ confirmations only</td></tr>
+    <tr><td>On-chain left after open</td><td class="r">~${fmt(c.remainingSats)} sats (incl. ${fmt(c.reserve)} reserve)</td></tr></table>
+    <button id="btnChanOpen" class="primary">${c.dryRun ? 'Simulate open (dry run)' : 'Confirm: open ' + fmt(c.sats) + ' sat channel'}</button><button id="btnChanCancel">Back</button>`;
+  $('btnChanCancel').onclick = () => { $('chanPreview').innerHTML = ''; $('chanForm').classList.remove('hidden'); chanPlan = null; };
   $('btnChanOpen').onclick = guard(async () => {
-    if (!confirm(`Open a ${fmt(chanPlan.sats)} sat channel to ${chanPlan.peerName}? This spends on-chain funds.`)) return;
-    const r = await api('channel/open', { planId: chanPlan.id, confirm: true });
-    $('chanPreview').innerHTML = `<p>${r.status === 'dry-run' ? 'Dry run: nothing was sent.' : 'Channel opening. Funding tx: <span class="mono">' + esc(r.txid || '') + '</span>'}</p>`;
+    if (!confirm(`Open a ${fmt(c.sats)} sat channel to ${c.peerName} at ${c.feeRate} sat/vB? This spends on-chain funds.`)) return;
+    const r = await api('channel/open', { planId: c.id, confirm: true });
+    const pend = r.pending ? `<br>Pending: ${fmt(r.pending.capacity)} sats${r.pending.confirmationsNeeded != null ? `, ${r.pending.confirmationsNeeded} confirmation(s) to go` : ''}` : '';
+    $('chanPreview').innerHTML = r.status === 'dry-run' ? '<p>Dry run: nothing was sent.</p><button id="btnChanAgain">Back</button>'
+      : `<p class="ok"><b>Channel opening.</b></p><p>Funding tx: <span class="mono">${esc(r.txid || '')}</span>${pend}<br>It becomes active after the funding tx confirms (usually 3 blocks).</p>
+        <div class="warn"><b>Download the channel backup now</b> (button below) and store it off this box.</div><button id="btnChanAgain">Done</button>`;
+    $('btnChanAgain').onclick = () => { $('chanPreview').innerHTML = ''; $('chanForm').classList.remove('hidden'); };
+    if (r.backupReminder) $('scbBanner').classList.remove('hidden');
     loadWallet();
   });
 });
@@ -190,12 +223,6 @@ $('btnRestore').onclick = guard(async () => {
   try { await api('wallet/restore', { words, passphrase: $('restorePass').value }); }
   finally { words.fill(''); clearRestore(); }
   toast('Saved: wallet restored, rescanning for your coins…'); setTimeout(guard(async () => { await loadWallet(); await init(); }), 2000);
-});
-$('btnReset').onclick = guard(async () => {
-  if ($('resetPhrase').value !== 'RESET WALLET') throw new Error('Type RESET WALLET exactly');
-  if (!confirm('Reset this wallet? Only your 24 words can recover its funds.')) return;
-  await api('wallet/reset', { phrase: $('resetPhrase').value, override: $('resetOverride').checked });
-  $('resetPhrase').value = ''; $('resetOverride').checked = false; await loadWallet();
 });
 $('btnScbDownload').onclick = guard(async () => {
   const r = await fetch('api/backup/download'); if (!r.ok) throw new Error((await r.json()).error || 'Error');

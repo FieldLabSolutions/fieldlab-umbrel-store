@@ -6,7 +6,7 @@ const { resolveInvoice } = require('./lib/lnurl');
 const { createLnd } = require('./lib/lnd');
 const { createHistory } = require('./lib/history');
 const { createShows } = require('./lib/shows');
-const { createWallet, walletPaths, READY } = require('./lib/wallet');
+const { createWallet, READY } = require('./lib/wallet');
 const { request, getJson } = require('./lib/http');
 
 function config(env = process.env) {
@@ -28,8 +28,7 @@ function config(env = process.env) {
 
 function createApp(cfg = config()) {
   fs.mkdirSync(cfg.dataDir, { recursive: true });
-  const resetMarker = walletPaths(cfg).marker;
-  const lnd = createLnd({ ...cfg.lnd, blocked: () => fs.existsSync(resetMarker) });
+  const lnd = createLnd(cfg.lnd);
   const history = createHistory(cfg.dataDir);
   const shows = createShows(cfg.dataDir);
   const wallet = createWallet({ lnd, cfg, history });
@@ -165,10 +164,11 @@ function createApp(cfg = config()) {
     'POST /api/wallet/seed': async () => wallet.seed(),
     'POST /api/wallet/init': async (_q, b) => wallet.init(b),
     'POST /api/wallet/restore': async (_q, b) => wallet.restore(b),
-    'POST /api/wallet/reset': async (_q, b) => wallet.reset(b),
     'POST /api/backup/restore': async (_q, b) => wallet.backupRestore(b),
     'POST /api/wallet/address': async () => wallet.address(),
     'GET /api/channel/peers': async () => ({ peers: wallet.PEERS, defaultSats: 500000 }),
+    'GET /api/channel/fees': async () => wallet.fees(),
+    'POST /api/channel/max': async (_q, b) => wallet.max(b),
     'POST /api/channel/preview': async (_q, b) => wallet.preview(b),
     'POST /api/channel/open': async (_q, b) => wallet.open(b),
     'GET /api/shows': async () => ({ shows: shows.list() }),

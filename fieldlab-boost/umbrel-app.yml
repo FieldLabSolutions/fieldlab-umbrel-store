@@ -3,7 +3,7 @@ id: fieldlab-boost
 category: bitcoin
 name: Dirty Boost Whore
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-boost/icon.png
-version: "0.3.3"
+version: "0.4.0"
 tagline: Podcasting 2.0 boosts from its own separate Lightning wallet
 description: >-
   Local-only web app with its own built-in LND wallet (separate seed, separate channels,
@@ -11,7 +11,7 @@ description: >-
   back up the 24 words shown at setup. Search Podcast Index or paste an RSS
   feed, review the show's value block payees and splits, and send boosts (keysend or
   Lightning address). Also pay BOLT11 invoices and create invoices with a QR code.
-  Ships in DRY_RUN mode by default.
+  Live by default (DRY_RUN=false).
 developer: Field Lab
 website: ""
 dependencies:
@@ -23,6 +23,6 @@ gallery: []
 path: ""
 defaultUsername: ""
 defaultPassword: ""
-releaseNotes: "Wallet tab: recent on-chain activity (amount, confirmations x/3, short txid) and recent Lightning received, auto-refreshing every 30s only while the tab is open, plus a Refresh button. No notifications."
+releaseNotes: "Wallet tab: new Open a channel page: suggested peers or paste any pubkey@host:port (incl. .onion), amount with Max (spendable minus ~10,000 sat reserve and fee), Slow/Normal/Fast fee from LND or custom sat/vB, private by default, full review (fee estimate, remaining balance, peer-minimum warnings) before confirm, pending status and backup reminder after. Wallet reset removed (restore from 24 words and channel backup stay). Boosts are tagged app_name Dirty Boost Whore."
 submitter: Field Lab
 submission: ""

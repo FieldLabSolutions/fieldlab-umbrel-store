@@ -25,7 +25,9 @@ function start(port = 0, { walletState = 'SERVER_ACTIVE', adminMacPath } = {}) {
     if (p === '/v1/newaddress') return json(res, 200, { address: 'bc1qmockdeposit' + u.searchParams.get('type').length });
     if (p === '/v1/transactions') { st.txQuery = u.search; return json(res, 200, { transactions: st.txs || [] }); }
     if (p === '/v1/invoices' && req.method === 'GET') { st.invQuery = u.search; return json(res, 200, { invoices: st.invoices || [] }); }
-    if (p === '/v1/channels/pending') return json(res, 200, { pending_open_channels: st.opened.map(() => ({})) });
+    if (p === '/v1/channels/pending') return json(res, 200, { pending_open_channels: st.opened.map(o => ({ channel: { remote_node_pub: o.node_pubkey_string, capacity: o.local_funding_amount, channel_point: '22' + '11'.repeat(31) + ':0' }, confirmations_until_active: 3 })) });
+    if (p === '/v1/peers' && req.method === 'GET') return json(res, 200, { peers: st.peers.map(k => ({ pub_key: k })) });
+    if (p.startsWith('/v2/wallet/estimatefee/')) { if (mac !== 'deadbeef') return json(res, 401, { message: 'bad macaroon' }); if (st.noFees) return json(res, 500, { message: 'unable to estimate' }); const c = Number(p.split('/').pop()); return json(res, 200, { sat_per_kw: String({ 144: 250, 6: 1250, 2: 5000 }[c] || 253) }); }
     if (p === '/v1/peers' && req.method === 'POST') { const b = JSON.parse(raw); if (st.peers.includes(b.addr.pubkey)) return json(res, 500, { message: 'already connected to peer' }); st.peers.push(b.addr.pubkey); return json(res, 200, {}); }
     if (p === '/v1/channels' && req.method === 'POST') { const b = JSON.parse(raw); st.opened.push(b); return json(res, 200, { funding_txid_bytes: Buffer.from('11'.repeat(31) + '22', 'hex').toString('base64'), output_index: 0 }); }
     if (p === '/v1/channels') return json(res, 200, { channels: st.channels });

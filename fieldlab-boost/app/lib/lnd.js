@@ -12,11 +12,10 @@ const BAKE_PERMISSIONS = [
 const redact = m => String(m).replace(/[0-9a-f]{40,}/gi, '[redacted]');
 
 // Thin LND REST client. Macaroons are only ever placed in request headers.
-function createLnd({ rest, certPath, macaroonPath, adminMacaroonPath, blocked = () => false }) {
+function createLnd({ rest, certPath, macaroonPath, adminMacaroonPath }) {
   let ca, macHex, baking;
   const loadCa = () => { if (!ca && certPath && fs.existsSync(certPath)) ca = fs.readFileSync(certPath); return ca; };
   function ensureMacaroon() {
-    if (blocked()) return Promise.reject(new Error('LND: wallet reset pending, restart the app in Umbrel'));
     if (macHex) return Promise.resolve(macHex);
     return baking || (baking = loadOrBake().finally(() => { baking = null; }));
   }
@@ -62,7 +61,6 @@ function createLnd({ rest, certPath, macaroonPath, adminMacaroonPath, blocked = 
     restoreWallet: (passwordBuf, mnemonic, passphrase, recoveryWindow) => call('POST', '/v1/initwallet', { wallet_password: passwordBuf.toString('base64'), cipher_seed_mnemonic: mnemonic,
       ...(passphrase ? { aezeed_passphrase: Buffer.from(passphrase).toString('base64') } : {}), recovery_window: recoveryWindow }, { auth: false }),
     ensureMacaroon,
-    forgetMacaroon: () => { macHex = null; },
     recoveryInfo: () => call('GET', '/v1/getrecoveryinfo'),
     exportBackup: () => call('GET', '/v1/channels/backup'),
     restoreBackup: multiB64 => call('POST', '/v1/channels/backup/restore', { multi_chan_backup: multiB64 }),
@@ -77,9 +75,12 @@ function createLnd({ rest, certPath, macaroonPath, adminMacaroonPath, blocked = 
     listChannels: () => call('GET', '/v1/channels'),
     pendingChannels: () => call('GET', '/v1/channels/pending'),
     connectPeer: (pubkey, host) => call('POST', '/v1/peers', { addr: { pubkey, host }, perm: false, timeout: '60' }),
-    openChannel: ({ pubkey, sats, isPrivate }) => call('POST', '/v1/channels', {
-      node_pubkey: Buffer.from(pubkey, 'hex').toString('base64'), local_funding_amount: String(sats), private: !!isPrivate,
-      min_confs: 3, spend_unconfirmed: false, target_conf: 6 }),
+    listPeers: () => call('GET', '/v1/peers'),
+    // WalletKit fee estimate for a confirmation target; returns { sat_per_kw }.
+    estimateFee: conf => call('GET', `/v2/wallet/estimatefee/${conf | 0}`),
+    openChannel: ({ pubkey, sats, isPrivate, feeRate }) => call('POST', '/v1/channels', {
+      node_pubkey: Buffer.from(pubkey, 'hex').toString('base64'), node_pubkey_string: pubkey, local_funding_amount: String(sats), private: !!isPrivate,
+      sat_per_vbyte: String(feeRate), min_confs: 3, spend_unconfirmed: false }),
     decodePayReq: pr => call('GET', '/v1/payreq/' + encodeURIComponent(pr)),
     addInvoice: (value, memo) => call('POST', '/v1/invoices', { value: String(value), memo }),
     lookupInvoice: hashHex => call('GET', '/v1/invoice/' + hashHex),

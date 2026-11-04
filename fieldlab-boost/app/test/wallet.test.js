@@ -54,24 +54,65 @@ for (const dryRun of [true, false]) test(`channel open DRY_RUN=${dryRun}`, async
     const seed = await t.api('wallet/seed', {});
     await t.api('wallet/init', { setupId: seed.setupId, confirm: true, checkWord: seed.words[seed.checkIndex - 1] });
     const { peers, defaultSats } = await t.api('channel/peers'); assert.equal(defaultSats, 500000);
-    const kraken = peers.find(p => p.id === 'kraken');
-    const kp = await t.api('channel/preview', { peer: kraken.uri, sats: 500000 }); assert.match(kp.warnings.join(' '), /1,000,000/); assert.equal(kp.isPrivate, true);
-    assert.match((await t.api('channel/preview', { peer: kraken.uri, sats: 1000000 })).error, /3\+ confirmations/);
-    assert.equal((await t.api('channel/preview', { peer: 'nonsense', sats: 500000 })).ok, false);
-    assert.equal((await t.api('channel/preview', { peer: kraken.uri, sats: 1000 })).ok, false);
-    const acinq = peers.find(p => p.id === 'acinq');
-    const pv = await t.api('channel/preview', { peer: acinq.uri, sats: 500000 }); assert.deepEqual(pv.warnings, []);
+    const fees = await t.api('channel/fees');
+    assert.deepEqual(fees.presets.map(p => [p.id, p.conf, p.satPerVbyte]), [['slow', 144, 1], ['normal', 6, 5], ['fast', 2, 20]]);
+    assert.equal(fees.spendable, 700000); assert.equal(fees.reserve, 10000);
+    const mx = await t.api('channel/max', { feeRate: 5 }); assert.equal(mx.max, 700000 - 10000 - Math.ceil((11 + 68 + 43 + 31) * 5));
+    assert.equal((await t.api('channel/max', { feeRate: 0 })).ok, false);
+    const kraken = peers.find(p => p.id === 'kraken'), acinq = peers.find(p => p.id === 'acinq');
+    const kp = await t.api('channel/preview', { peer: kraken.uri, sats: 500000, feeRate: 5 }); assert.match(kp.warnings.join(' '), /needs at least 1,000,000/); assert.equal(kp.isPrivate, true);
+    const ap = await t.api('channel/preview', { peer: acinq.uri, sats: 500000, feeRate: 5 }); assert.match(ap.warnings.join(' '), /reportedly refuses.*1,000,000.*unverified/);
+    assert.match((await t.api('channel/preview', { peer: kraken.uri, sats: 1000000, feeRate: 5 })).error, /more than your 700,000/);
+    assert.match((await t.api('channel/preview', { peer: kraken.uri, sats: 695000, feeRate: 5 })).error, /Max at 5 sat\/vB is 689,235/);
+    assert.equal((await t.api('channel/preview', { peer: 'nonsense', sats: 500000, feeRate: 5 })).ok, false);
+    assert.match((await t.api('channel/preview', { peer: kraken.uri, sats: 19999, feeRate: 5 })).error, /Minimum channel is 20,000/);
+    assert.match((await t.api('channel/preview', { peer: kraken.uri, sats: 500000 })).error, /Fee rate/);
+    const onion = '03' + 'ef'.repeat(32) + '@' + 'a'.repeat(56) + '.onion:9735';
+    const op = await t.api('channel/preview', { peer: onion, sats: 50000, feeRate: 2, private: false });
+    assert.equal(op.peerName, 'Custom peer'); assert.match(op.warnings.join(' '), /unknown \(unverified\)/); assert.match(op.warnings.join(' '), /Public channel/);
+    const pv = await t.api('channel/preview', { peer: kraken.uri, sats: 1000000 - 400000, feeRate: 7 });
+    assert.equal(pv.estFeeSats, Math.ceil(153 * 7)); assert.equal(pv.remainingSats, 700000 - 600000 - pv.estFeeSats);
     assert.equal((await t.api('channel/open', { planId: pv.id })).ok, false, 'needs confirm');
     const r = await t.api('channel/open', { planId: pv.id, confirm: true });
     assert.equal(r.status, dryRun ? 'dry-run' : 'opening');
-    assert.equal(t.m.st.opened.length, dryRun ? 0 : 1);
-    if (!dryRun) { const o = t.m.st.opened[0]; assert.equal(o.private, true); assert.equal(o.min_confs, 3); assert.equal(o.spend_unconfirmed, false); assert.equal(o.local_funding_amount, '500000');
-      assert.equal(Buffer.from(o.node_pubkey, 'base64').toString('hex'), acinq.uri.split('@')[0]); assert.equal(r.txid, '22' + '11'.repeat(31)); }
+    assert.equal(t.m.st.opened.length, dryRun ? 0 : 1); assert.equal(t.m.st.peers.length, dryRun ? 0 : 1);
+    if (!dryRun) { const o = t.m.st.opened[0]; assert.equal(o.private, true); assert.equal(o.min_confs, 3); assert.equal(o.spend_unconfirmed, false); assert.equal(o.local_funding_amount, '600000');
+      assert.equal(o.sat_per_vbyte, '7'); assert.equal(o.node_pubkey_string, kraken.uri.split('@')[0]);
+      assert.equal(Buffer.from(o.node_pubkey, 'base64').toString('hex'), kraken.uri.split('@')[0]); assert.equal(r.txid, '22' + '11'.repeat(31));
+      assert.equal(r.pending.capacity, 600000); assert.equal(r.pending.confirmationsNeeded, 3); assert.equal(r.backupReminder, true);
+      // second open to same peer: already connected per /v1/peers, no new connect
+      const p2 = await t.api('channel/preview', { peer: kraken.uri, sats: 30000, feeRate: 7 }); await t.api('channel/open', { planId: p2.id, confirm: true });
+      assert.equal(t.m.st.peers.length, 1); assert.equal(t.m.st.opened.length, 2);
+    } else assert.equal(r.pending, null);
     assert.equal((await t.api('channel/open', { planId: pv.id, confirm: true })).ok, false, 'no replay');
   } finally { t.close(); }
 });
 
+test('fee presets null when LND cannot estimate; custom rate still works', async () => {
+  const t = await boot();
+  try {
+    await t.api('wallet/restore', { words: SEED }); t.m.st.noFees = true;
+    const f = await t.api('channel/fees'); assert.ok(f.presets.every(p => p.satPerVbyte === null));
+    assert.equal((await t.api('channel/preview', { peer: '03' + 'ab'.repeat(32) + '@1.2.3.4:9735', sats: 100000, feeRate: 3 })).ok, true);
+  } finally { t.close(); }
+});
+
+test('wallet reset is removed', async () => {
+  const t = await boot();
+  try {
+    await t.api('wallet/restore', { words: SEED });
+    const r = await fetch(t.base + 'wallet/reset', { method: 'POST', body: JSON.stringify({ phrase: 'RESET WALLET', override: true }) });
+    assert.equal(r.status, 404);
+    const w = await t.api('wallet'); assert.equal(w.ready, true); assert.equal(w.resetPending, undefined);
+    const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8') + fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+    assert.ok(!/RESET WALLET|wDanger|btnReset|wallet\/reset/.test(html));
+    assert.ok(!fs.readFileSync(path.join(__dirname, '..', '..', 'docker-compose.yml'), 'utf8').includes('RESET_PENDING'));
+  } finally { t.close(); }
+});
+
 test('parseUri', () => {
+  assert.equal(parseUri('03' + 'a'.repeat(64) + '@' + 'b'.repeat(56) + '.onion:9735').host, 'b'.repeat(56) + '.onion:9735');
+  assert.throws(() => parseUri('03' + 'a'.repeat(64) + '@1.2.3.4:70000'));
   assert.deepEqual(parseUri('03' + 'a'.repeat(64) + '@1.2.3.4:9735'), { pubkey: '03' + 'a'.repeat(64), host: '1.2.3.4:9735' });
   assert.throws(() => parseUri('04' + 'a'.repeat(64) + '@x:1'));
 });
@@ -107,35 +148,6 @@ test('restore calls initwallet with mnemonic, passphrase, recovery_window; nothi
     assert.ok(!t.logs.join('\n').includes(t.m.st.initPassword));
     assert.equal(fs.readFileSync(path.join(t.dir, 'history.json'), 'utf8').includes('abandon'), false);
     assert.match((await t.api('wallet/restore', { words: SEED })).error, /already exists/);
-  } finally { t.close(); }
-});
-
-test('reset guards: phrase, channels, funds override, marker + restart state', async () => {
-  const t = await boot();
-  try {
-    await t.api('wallet/restore', { words: SEED });
-    assert.match((await t.api('wallet/reset', { phrase: 'reset wallet', override: true })).error, /Type RESET WALLET/);
-    const r1 = await t.api('wallet/reset', { phrase: 'RESET WALLET', override: true }); assert.match(r1.error, /1 open and 0 pending/);
-    t.m.st.channels = []; t.m.st.opened.push({});
-    assert.match((await t.api('wallet/reset', { phrase: 'RESET WALLET', override: true })).error, /0 open and 1 pending/);
-    t.m.st.opened = [];
-    const r2 = await t.api('wallet/reset', { phrase: 'RESET WALLET' }); assert.match(r2.error, /720,000 sats on-chain.*150,000 sats in Lightning/);
-    const marker = path.join(t.dir, 'lnd', 'RESET_PENDING'); assert.equal(fs.existsSync(marker), false);
-    assert.ok(fs.existsSync(path.join(t.dir, 'boost-node.macaroon')));
-    const r3 = await t.api('wallet/reset', { phrase: 'RESET WALLET', override: true }); assert.equal(r3.ok, true); assert.equal(r3.restartRequired, true);
-    assert.ok(fs.existsSync(marker)); assert.equal(fs.existsSync(path.join(t.dir, 'boost-node.macaroon')), false);
-    const w = await t.api('wallet'); assert.equal(w.state, 'RESET_PENDING');
-    assert.match((await t.api('wallet/address', {})).error, /reset pending/);
-    assert.match((await t.api('wallet/restore', { words: SEED })).error, /restart the app/);
-  } finally { t.close(); }
-});
-
-test('reset with empty wallet needs no override', async () => {
-  const t = await boot();
-  try {
-    await t.api('wallet/restore', { words: SEED });
-    t.m.st.channels = []; t.m.st.onchain = { confirmed_balance: '0', unconfirmed_balance: '0' }; t.m.st.local = '0';
-    assert.equal((await t.api('wallet/reset', { phrase: 'RESET WALLET' })).ok, true);
   } finally { t.close(); }
 });
 
