@@ -71,6 +71,9 @@ function createLnd({ rest, certPath, macaroonPath, adminMacaroonPath, blocked = 
     walletBalance: () => call('GET', '/v1/balance/blockchain'),
     listUnspent: minConfs => call('GET', `/v1/utxos?min_confs=${minConfs}&max_confs=2147483647`),
     newAddress: () => call('GET', '/v1/newaddress?type=WITNESS_PUBKEY_HASH'),
+    // Small windows only: on-chain txs from a start height (-1 = include unconfirmed), newest invoices first.
+    listTransactions: startHeight => call('GET', `/v1/transactions?start_height=${Math.max(0, startHeight | 0)}&end_height=-1`),
+    listInvoices: max => call('GET', `/v1/invoices?reversed=true&num_max_invoices=${max | 0}`),
     listChannels: () => call('GET', '/v1/channels'),
     pendingChannels: () => call('GET', '/v1/channels/pending'),
     connectPeer: (pubkey, host) => call('POST', '/v1/peers', { addr: { pubkey, host }, perm: false, timeout: '60' }),

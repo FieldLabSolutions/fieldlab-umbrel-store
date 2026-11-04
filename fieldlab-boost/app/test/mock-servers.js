@@ -23,6 +23,8 @@ function start(port = 0, { walletState = 'SERVER_ACTIVE', adminMacPath } = {}) {
     if (p === '/v1/balance/blockchain') return json(res, 200, st.onchain);
     if (p === '/v1/utxos') return json(res, 200, { utxos: Number(u.searchParams.get('min_confs')) >= 3 ? st.utxos : st.utxos.concat({ amount_sat: '20000' }) });
     if (p === '/v1/newaddress') return json(res, 200, { address: 'bc1qmockdeposit' + u.searchParams.get('type').length });
+    if (p === '/v1/transactions') { st.txQuery = u.search; return json(res, 200, { transactions: st.txs || [] }); }
+    if (p === '/v1/invoices' && req.method === 'GET') { st.invQuery = u.search; return json(res, 200, { invoices: st.invoices || [] }); }
     if (p === '/v1/channels/pending') return json(res, 200, { pending_open_channels: st.opened.map(() => ({})) });
     if (p === '/v1/peers' && req.method === 'POST') { const b = JSON.parse(raw); if (st.peers.includes(b.addr.pubkey)) return json(res, 500, { message: 'already connected to peer' }); st.peers.push(b.addr.pubkey); return json(res, 200, {}); }
     if (p === '/v1/channels' && req.method === 'POST') { const b = JSON.parse(raw); st.opened.push(b); return json(res, 200, { funding_txid_bytes: Buffer.from('11'.repeat(31) + '22', 'hex').toString('base64'), output_index: 0 }); }

@@ -155,3 +155,24 @@ test('channel backup download + restore upload + channel.backup surfaced', async
     assert.equal((await t.api('backup/restore', { backup: b64, confirm: true })).ok, true); assert.deepEqual(t.m.st.restoredScb, [b64]);
   } finally { t.close(); }
 });
+
+test('wallet activity: small pages, pending first, settled invoices only', async () => {
+  const t = await boot();
+  try {
+    assert.equal((await t.api('wallet/activity')).ready, false);
+    const seed = await t.api('wallet/seed', {});
+    await t.api('wallet/init', { setupId: seed.setupId, confirm: true, checkWord: seed.words[seed.checkIndex - 1] });
+    const now = Math.floor(Date.now() / 1000);
+    t.m.st.txs = Array.from({ length: 14 }, (_, i) => ({ tx_hash: String(i).padStart(2, '0').repeat(32), amount: String(1000 * (i + 1)), num_confirmations: i + 1, time_stamp: String(now - 600 * (i + 1)) }))
+      .concat({ tx_hash: 'ee'.repeat(32), amount: '20000', num_confirmations: 0, time_stamp: String(now) });
+    t.m.st.invoices = [{ state: 'SETTLED', amt_paid_sat: '2100', memo: 'boost', settle_date: String(now) }, { state: 'OPEN', value: '5' }];
+    const a = await t.api('wallet/activity');
+    assert.equal(a.ready, true); assert.equal(a.onchain.length, 10);
+    assert.deepEqual(a.onchain[0], { txid: 'ee'.repeat(32), sats: 20000, confs: 0, time: now * 1000 });
+    assert.equal(a.onchain[1].confs, 1);
+    assert.match(t.m.st.txQuery, /start_height=865968&end_height=-1/);
+    assert.match(t.m.st.invQuery, /reversed=true&num_max_invoices=5/);
+    assert.deepEqual(a.lightning.map(i => i.sats), [2100]);
+    assert.ok(a.checked > 0);
+  } finally { t.close(); }
+});

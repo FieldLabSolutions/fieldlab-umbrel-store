@@ -120,9 +120,28 @@ async function loadWallet() {
   $('wState').innerHTML = `<span class="ok">Boost wallet ready</span>${sy}${rec} · ${w.channels} channel${w.channels === 1 ? '' : 's'}${w.pendingOpen ? ` · ${w.pendingOpen} opening` : ''}`;
   $('wBal').innerHTML = `<h2>Balances</h2><table><tr><td>On-chain confirmed</td><td class="r"><b>${fmt(w.onchain.confirmed)}</b></td></tr><tr><td>On-chain unconfirmed</td><td class="r">${fmt(w.onchain.unconfirmed)}</td></tr><tr><td>Ready for a channel (3+ conf)</td><td class="r">${fmt(w.onchain.spendable3)}</td></tr><tr><td>Lightning can send</td><td class="r"><b>${fmt(w.lightning.local)}</b></td></tr><tr><td>Lightning can receive</td><td class="r">${fmt(w.lightning.remote)}</td></tr></table>`;
   $('wReady').classList.remove('hidden');
+  guard(loadActivity)(); syncActivityTimer();
   if (!peers.length) { const p = await api('channel/peers'); peers = p.peers; $('chanSats').value = p.defaultSats;
     $('peerSel').innerHTML = peers.map((x, i) => `<option value="${i}">${esc(x.name)}</option>`).join('') + '<option value="custom">Custom pubkey@host…</option>'; syncPeer(); }
 }
+// Wallet activity: one 30s timer, only while the Wallet tab is shown and the page is visible.
+let actTimer = null;
+const walletVisible = () => !document.hidden && !$('tab-wallet').classList.contains('hidden') && !$('wReady').classList.contains('hidden');
+async function loadActivity() {
+  if (!walletVisible()) return;
+  const a = await api('wallet/activity');
+  if (!a.ready) { $('wAct').textContent = 'Wallet not ready.'; return; }
+  $('wAct').innerHTML = a.onchain.length ? '<table>' + a.onchain.map(t => `<tr><td class="${t.sats >= 0 ? 'ok' : ''}">${t.sats >= 0 ? '+' : ''}${fmt(t.sats)}</td><td>${t.confs >= 3 ? '<span class="ok">' + fmt(t.confs) + ' conf</span>' : `<span class="bad">${t.confs}/3</span>`}</td><td class="mono r" title="${esc(t.txid)}">${esc(t.txid.slice(0, 8))}…${esc(t.txid.slice(-6))}</td></tr>`).join('') + '</table>' : 'No on-chain transactions yet.';
+  $('wLn').innerHTML = a.lightning.length ? '<b>Recent Lightning received</b><table>' + a.lightning.map(i => `<tr><td class="ok">+${fmt(i.sats)}</td><td>${esc(i.memo)}</td><td class="r">${i.time ? new Date(i.time).toLocaleTimeString() : ''}</td></tr>`).join('') + '</table>' : '';
+  $('wChecked').textContent = 'Last checked ' + new Date(a.checked).toLocaleTimeString([], { hour12: false });
+}
+function syncActivityTimer() {
+  if (walletVisible()) { if (!actTimer) actTimer = setInterval(() => loadActivity().catch(e => { $('wChecked').textContent = 'Check failed ' + new Date().toLocaleTimeString([], { hour12: false }) + ': ' + e.message; }), 30000); }
+  else if (actTimer) { clearInterval(actTimer); actTimer = null; }
+}
+document.addEventListener('visibilitychange', () => { syncActivityTimer(); if (!document.hidden) guard(loadActivity)(); });
+document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => setTimeout(syncActivityTimer, 0)));
+$('btnActRefresh').onclick = guard(loadActivity);
 function syncPeer() {
   const v = $('peerSel').value, p = peers[v]; $('peerCustom').classList.toggle('hidden', v !== 'custom');
   $('peerNote').innerHTML = p ? esc(p.note) + (p.minSats ? `<div class="warn">${esc(p.name)} needs at least ${fmt(p.minSats)} sats.</div>` : '') : 'Paste the full node URI.';

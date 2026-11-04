@@ -149,6 +149,19 @@ function createApp(cfg = config()) {
     },
     'GET /api/invoice': async (q) => { const i = await lnd.lookupInvoice(String(q.get('hash')).replace(/[^0-9a-f]/gi, '')); return { settled: i.state === 'SETTLED' || i.settled === true, state: i.state }; },
     'GET /api/wallet': async () => wallet.status(),
+    // Recent activity for the Wallet tab (polled every 30s by the UI). Small pages, nothing cached.
+    'GET /api/wallet/activity': async () => {
+      const state = await lnd.state();
+      if (!READY.includes(state)) return { ready: false, state };
+      const info = await lnd.getInfo();
+      const height = Number(info.block_height || 0);
+      const [tx, inv] = await Promise.all([lnd.listTransactions(height ? height - 4032 : 0), lnd.listInvoices(5).catch(() => ({ invoices: [] }))]);
+      const onchain = (tx.transactions || []).map(t => ({ txid: String(t.tx_hash || ''), sats: Number(t.amount || 0), confs: Number(t.num_confirmations || 0), time: Number(t.time_stamp || 0) * 1000 }))
+        .sort((a, b) => a.confs - b.confs || b.time - a.time).slice(0, 10);
+      const lightning = (inv.invoices || []).filter(i => i.state === 'SETTLED' || i.settled).slice(0, 5)
+        .map(i => ({ sats: Number(i.amt_paid_sat || i.value || 0), memo: String(i.memo || '').slice(0, 80), time: Number(i.settle_date || i.creation_date || 0) * 1000 }));
+      return { ready: true, height, onchain, lightning, checked: Date.now() };
+    },
     'POST /api/wallet/seed': async () => wallet.seed(),
     'POST /api/wallet/init': async (_q, b) => wallet.init(b),
     'POST /api/wallet/restore': async (_q, b) => wallet.restore(b),

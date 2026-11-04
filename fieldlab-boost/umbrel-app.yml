@@ -3,7 +3,7 @@ id: fieldlab-boost
 category: bitcoin
 name: Dirty Boost Whore
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-boost/icon.png
-version: "0.3.2"
+version: "0.3.3"
 tagline: Podcasting 2.0 boosts from its own separate Lightning wallet
 description: >-
   Local-only web app with its own built-in LND wallet (separate seed, separate channels,
@@ -23,6 +23,6 @@ gallery: []
 path: ""
 defaultUsername: ""
 defaultPassword: ""
-releaseNotes: "Full-width desktop layout: cards flow into 2-3 columns on wide screens. Phone layout unchanged."
+releaseNotes: "Wallet tab: recent on-chain activity (amount, confirmations x/3, short txid) and recent Lightning received, auto-refreshing every 30s only while the tab is open, plus a Refresh button. No notifications."
 submitter: Field Lab
 submission: ""
