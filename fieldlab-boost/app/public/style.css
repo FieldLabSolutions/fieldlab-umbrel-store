@@ -17,3 +17,6 @@ table{width:100%;border-collapse:collapse;font-size:15px}td{padding:6px 4px;bord
 #toast{position:fixed;bottom:16px;left:16px;right:16px;background:var(--bad);color:#111;padding:14px;border-radius:12px;font-weight:600}
 #summary{font-size:16px;color:#d5dae1}
 h1 .logo{width:28px;height:28px;vertical-align:-5px;border-radius:6px}
+.seed{columns:2;font-family:ui-monospace,monospace;font-size:17px;padding-left:2.2em;margin:8px 0}.seed li{padding:3px 0}
+label.check{display:flex;gap:10px;align-items:center;color:var(--fg)}label.check input{width:24px;height:24px;margin:0;flex:none}
+.warn{background:#3b2a00;color:var(--acc);padding:10px;border-radius:10px;margin:8px 0;font-size:15px}

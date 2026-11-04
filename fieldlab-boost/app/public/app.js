@@ -12,6 +12,7 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x === b));
   document.querySelectorAll('main section').forEach(s => s.classList.toggle('hidden', s.id !== 'tab-' + b.dataset.tab));
   if (b.dataset.tab === 'history') loadHistory();
+  if (b.dataset.tab === 'wallet') guard(loadWallet)();
 });
 const PLACEHOLDER = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72"><rect width="72" height="72" fill="#2a2f38"/><text x="36" y="46" font-size="30" text-anchor="middle" fill="#8a93a0">🎙</text></svg>');
 let feedUrl = null, plan = null, payDec = null, loaded = null, savedList = [];
@@ -20,6 +21,7 @@ async function init() {
   $('dry').classList.toggle('hidden', !s.dryRun); $('searchBox').classList.toggle('hidden', !s.search); $('sender').value = s.senderName;
   try {
     const m = await api('summary');
+    if (!m.ready) { $('summary').innerHTML = m.state === 'NON_EXISTING' ? 'Boost wallet not set up yet · <b>open the Wallet tab</b>' : `Boost wallet is starting (${esc(m.state)})…`; if (m.state === 'NON_EXISTING') $('navWallet').click(); return; }
     $('summary').innerHTML = `<b>${esc(m.alias)}</b> · ${m.activeChannels} active ch · ${m.synced ? '<span class="ok">synced</span>' : '<span class="bad">not synced</span>'}<br>Can send <b>${fmt(m.localSats)}</b> sats · can receive <b>${fmt(m.remoteSats)}</b> sats`;
   } catch (e) { $('summary').innerHTML = `<span class="bad">Can't reach LND: ${esc(e.message)}</span>`; }
 }
@@ -76,7 +78,7 @@ $('btnInvoice').onclick = guard(async () => {
 });
 async function loadHistory() {
   const h = await api('history');
-  $('history').innerHTML = h.items.map(i => `<div class="card small"><b>${esc(i.kind)}</b> · ${fmt(i.sats)} sats ${i.dryRun ? '· dry run' : ''}<br>${esc(i.show || i.description || '')} ${esc(i.episode ? '– ' + i.episode : '')}
+  $('history').innerHTML = h.items.map(i => `<div class="card small"><b>${esc(i.kind)}</b>${i.sats != null ? ' · ' + fmt(i.sats) + ' sats' : ''} ${i.dryRun ? '· dry run' : ''}<br>${esc(i.show || i.description || '')} ${esc(i.episode ? '– ' + i.episode : '')}
     <br>${i.results ? i.results.map(r => esc(r.name) + ': ' + esc(r.status)).join(', ') : esc(i.status)}<br><span class="muted">${new Date(i.ts).toLocaleString()}</span></div>`).join('') || '<div class="card muted">Nothing yet</div>';
 }
 async function loadSaved(select) {
@@ -100,5 +102,53 @@ $('btnSaveShow').onclick = guard(async () => { await api('shows', loaded); await
 $('btnRemoveSaved').onclick = guard(async () => {
   const s = savedList[$('saved').value]; if (!s || !confirm(`Remove ${s.name} from my podcasts?`)) return;
   await api('shows/remove', { feedUrl: s.feedUrl }); await loadSaved();
+});
+let setup = null, peers = [], chanPlan = null;
+async function loadWallet() {
+  const w = await api('wallet');
+  ['wSetup', 'wSeed', 'wReady'].forEach(id => $(id).classList.add('hidden'));
+  if (w.state === 'NON_EXISTING') { $('wState').innerHTML = 'No boost wallet yet.'; if (setup) $('wSeed').classList.remove('hidden'); else $('wSetup').classList.remove('hidden'); return; }
+  if (!w.ready) { $('wState').innerHTML = w.state === 'UNREACHABLE' ? 'Wallet node is starting… try again in a minute.' : `Wallet is ${esc(w.state.toLowerCase())}…` + (w.unlockFile ? '' : ' <span class="bad">(no unlock file)</span>'); return; }
+  $('wState').innerHTML = `<span class="ok">Boost wallet ready</span> · ${w.channels} channel${w.channels === 1 ? '' : 's'}${w.pendingOpen ? ` · ${w.pendingOpen} opening` : ''}`;
+  $('wBal').innerHTML = `<h2>Balances</h2><table><tr><td>On-chain confirmed</td><td class="r"><b>${fmt(w.onchain.confirmed)}</b></td></tr><tr><td>On-chain unconfirmed</td><td class="r">${fmt(w.onchain.unconfirmed)}</td></tr><tr><td>Ready for a channel (3+ conf)</td><td class="r">${fmt(w.onchain.spendable3)}</td></tr><tr><td>Lightning can send</td><td class="r"><b>${fmt(w.lightning.local)}</b></td></tr><tr><td>Lightning can receive</td><td class="r">${fmt(w.lightning.remote)}</td></tr></table>`;
+  $('wReady').classList.remove('hidden');
+  if (!peers.length) { const p = await api('channel/peers'); peers = p.peers; $('chanSats').value = p.defaultSats;
+    $('peerSel').innerHTML = peers.map((x, i) => `<option value="${i}">${esc(x.name)}</option>`).join('') + '<option value="custom">Custom pubkey@host…</option>'; syncPeer(); }
+}
+function syncPeer() {
+  const v = $('peerSel').value, p = peers[v]; $('peerCustom').classList.toggle('hidden', v !== 'custom');
+  $('peerNote').innerHTML = p ? esc(p.note) + (p.minSats ? `<div class="warn">${esc(p.name)} needs at least ${fmt(p.minSats)} sats.</div>` : '') : 'Paste the full node URI.';
+}
+$('peerSel').onchange = syncPeer;
+$('btnGenSeed').onclick = guard(async () => {
+  setup = await api('wallet/seed', {});
+  $('seedWords').innerHTML = setup.words.map(w => `<li>${esc(w)}</li>`).join(''); $('checkIdx').textContent = setup.checkIndex;
+  $('seedOk').checked = false; $('checkWord').value = '';
+  $('wSetup').classList.add('hidden'); $('wSeed').classList.remove('hidden');
+});
+$('btnInit').onclick = guard(async () => {
+  if (!$('seedOk').checked) throw new Error('Tick "I wrote them down" first');
+  await api('wallet/init', { setupId: setup.setupId, confirm: true, checkWord: $('checkWord').value });
+  setup = null; $('seedWords').innerHTML = ''; $('checkWord').value = '';
+  toast('Saved: wallet created'); setTimeout(guard(async () => { await loadWallet(); await init(); }), 1500);
+});
+$('btnAddr').onclick = guard(async () => {
+  const r = await api('wallet/address', {});
+  const qr = qrcode(0, 'M'); qr.addData(r.uri); qr.make();
+  $('addrOut').innerHTML = `<div id="qr">${qr.createImgTag(6, 8)}</div><p class="mono">${esc(r.address)}</p><button id="btnCopyAddr">Copy address</button>`;
+  $('btnCopyAddr').onclick = () => navigator.clipboard.writeText(r.address).then(() => toast('Saved to clipboard'));
+});
+$('btnChanPreview').onclick = guard(async () => {
+  const v = $('peerSel').value;
+  chanPlan = await api('channel/preview', { peer: v === 'custom' ? $('peerCustom').value : peers[v].uri, sats: Number($('chanSats').value), private: $('chanPrivate').checked });
+  $('chanPreview').innerHTML = `<h2>Confirm channel</h2>${chanPlan.warnings.map(w => `<div class="warn">${esc(w)}</div>`).join('')}<p>Peer: <b>${esc(chanPlan.peerName)}</b><br><span class="mono">${esc(chanPlan.pubkey.slice(0, 16))}…@${esc(chanPlan.host)}</span><br>Amount: <b>${fmt(chanPlan.sats)} sats</b> + on-chain fee<br>${chanPlan.isPrivate ? 'Private (unannounced)' : '<span class="bad">Public</span>'}</p>
+    <button id="btnChanOpen" class="primary">${chanPlan.dryRun ? 'Open (dry run)' : 'Open channel for ' + fmt(chanPlan.sats) + ' sats'}</button><button id="btnChanCancel">Cancel</button>`;
+  $('btnChanCancel').onclick = () => { $('chanPreview').innerHTML = ''; };
+  $('btnChanOpen').onclick = guard(async () => {
+    if (!confirm(`Open a ${fmt(chanPlan.sats)} sat channel to ${chanPlan.peerName}? This spends on-chain funds.`)) return;
+    const r = await api('channel/open', { planId: chanPlan.id, confirm: true });
+    $('chanPreview').innerHTML = `<p>${r.status === 'dry-run' ? 'Dry run: nothing was sent.' : 'Channel opening. Funding tx: <span class="mono">' + esc(r.txid || '') + '</span>'}</p>`;
+    loadWallet();
+  });
 });
 guard(init)(); guard(loadSaved)();

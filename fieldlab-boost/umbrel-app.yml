@@ -3,17 +3,19 @@ id: fieldlab-boost
 category: bitcoin
 name: Dirty Boost Whore
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-boost/icon.png
-version: "0.1.1"
-tagline: Dirty Boost Whore – Podcasting 2.0 boosts, keysend and invoices from your node
+version: "0.2.0"
+tagline: Podcasting 2.0 boosts from its own separate Lightning wallet
 description: >-
-  Local-only web app for your Umbrel Lightning node. Search Podcast Index or paste an RSS
+  Local-only web app with its own built-in LND wallet (separate seed, separate channels,
+  neutral alias, outbound over Tor, no inbound). Uninstalling the app deletes that wallet:
+  back up the 24 words shown at setup. Search Podcast Index or paste an RSS
   feed, review the show's value block payees and splits, and send boosts (keysend or
   Lightning address). Also pay BOLT11 invoices and create invoices with a QR code.
   Ships in DRY_RUN mode by default.
 developer: Field Lab
 website: ""
 dependencies:
-  - lightning
+  - bitcoin
 repo: ""
 support: ""
 port: 8743
@@ -21,6 +23,6 @@ gallery: []
 path: ""
 defaultUsername: ""
 defaultPassword: ""
-releaseNotes: "Renamed to Dirty Boost Whore, new favicon, saved-podcasts pulldown, and fixed live sending on newer LND (uses the router send endpoint)."
+releaseNotes: "Own separate LND wallet: Wallet tab with first-run setup, on-chain deposit QR, private channel open. Boosts now pay from this wallet, not your main node. UNINSTALL DELETES THIS WALLET – write down the 24 words."
 submitter: Field Lab
 submission: ""

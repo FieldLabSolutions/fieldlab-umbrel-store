@@ -2,7 +2,7 @@
 <title>Dirty Boost Whore</title><link rel="icon" type="image/svg+xml" href="favicon.svg"><link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png"><link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png"><meta name="theme-color" content="#0d0d12"><link rel="stylesheet" href="style.css"></head><body>
 <header><h1><img src="favicon.svg" alt="" class="logo"> Dirty Boost Whore</h1><div id="dry" class="badge hidden">DRY RUN – no sats move</div>
 <div id="summary" class="card small">Loading node…</div></header>
-<nav><button data-tab="boost" class="active">Boost</button><button data-tab="pay">Pay</button><button data-tab="receive">Receive</button><button data-tab="history">History</button></nav>
+<nav><button data-tab="boost" class="active">Boost</button><button data-tab="pay">Pay</button><button data-tab="receive">Receive</button><button data-tab="history">History</button><button data-tab="wallet" id="navWallet">Wallet</button></nav>
 <main>
 <section id="tab-boost">
   <div class="card"><label>Saved podcasts<select id="saved"></select></label><button id="btnRemoveSaved" class="hidden">Remove from my podcasts</button>
@@ -21,5 +21,29 @@
 <section id="tab-pay" class="hidden"><div class="card"><textarea id="bolt11" rows="3" placeholder="Paste BOLT11 invoice (lnbc…)"></textarea><button id="btnDecode">Decode</button></div><div id="payPreview" class="card hidden"></div></section>
 <section id="tab-receive" class="hidden"><div class="card"><label>Amount (sats)<input id="invSats" type="number" inputmode="numeric" placeholder="e.g. 1000"></label><label>Memo<input id="invMemo" placeholder="What is it for? (optional)"></label><button id="btnInvoice" class="primary">Create invoice</button></div><div id="invOut" class="card hidden"></div></section>
 <section id="tab-history" class="hidden"><div id="history"></div></section>
+<section id="tab-wallet" class="hidden">
+  <div id="wState" class="card small">Checking wallet…</div>
+  <div id="wSetup" class="card hidden"><h2>Set up the boost wallet</h2>
+    <p class="small">This app runs its own Lightning wallet, separate from your main node. You'll get 24 words. They are the only backup. They are shown <b>once</b> and never saved by the app.</p>
+    <p class="small bad"><b>Uninstalling this app deletes this wallet.</b> Without the 24 words the funds are gone.</p>
+    <button id="btnGenSeed" class="primary">Create wallet</button></div>
+  <div id="wSeed" class="card hidden"><h2>Write these 24 words down</h2><p class="small bad">On paper. No photos, screenshots, chat or cloud.</p>
+    <ol id="seedWords" class="seed"></ol>
+    <label class="check"><input type="checkbox" id="seedOk"> I wrote them down, in order</label>
+    <label>Type word #<span id="checkIdx"></span> to confirm<input id="checkWord" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <button id="btnInit" class="primary">Finish setup</button></div>
+  <div id="wReady" class="hidden">
+    <div class="card" id="wBal"></div>
+    <div class="card"><h2>Add funds (on-chain)</h2><p class="small">Send bitcoin from Strike or any wallet. Channels need 3 confirmations.</p>
+      <button id="btnAddr">Show deposit address</button><div id="addrOut"></div></div>
+    <div class="card"><h2>Open a channel</h2>
+      <label>Peer<select id="peerSel"></select></label>
+      <input id="peerCustom" class="hidden" placeholder="pubkey@host:port">
+      <div id="peerNote" class="small muted"></div>
+      <label>Amount (sats)<input id="chanSats" type="number" inputmode="numeric" value="500000"></label>
+      <label class="check"><input type="checkbox" id="chanPrivate" checked> Private (unannounced) channel</label>
+      <button id="btnChanPreview" class="primary">Review channel</button><div id="chanPreview"></div></div>
+  </div>
+</section>
 </main><div id="toast" class="hidden"></div>
 <script src="vendor/qrcode.js"></script><script src="app.js"></script></body></html>

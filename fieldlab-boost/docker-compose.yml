@@ -16,18 +16,39 @@ services:
     command: ["node", "server.js"]
     volumes:
       - ${APP_DATA_DIR}/app:/app:ro
+      # Holds history, saved shows, the baked macaroon, and the LND dir (data/lnd)
       - ${APP_DATA_DIR}/data:/data
-      - ${APP_LIGHTNING_NODE_DATA_DIR}:/lnd:ro
     environment:
       PORT: 8080
       DATA_DIR: /data
-      LND_REST: https://${APP_LIGHTNING_NODE_IP}:8080
-      TLS_CERT_PATH: /lnd/tls.cert
-      # Use a limited baked macaroon (see README), not admin.macaroon
-      MACAROON_PATH: /data/boost.macaroon
+      LND_REST: https://${APP_BOOST_LND_IP}:${APP_BOOST_LND_REST_PORT}
+      TLS_CERT_PATH: /data/lnd/tls.cert
+      # Baked by the app on first use from admin.macaroon (see README)
+      MACAROON_PATH: /data/boost-node.macaroon
+      ADMIN_MACAROON_PATH: /data/lnd/data/chain/bitcoin/${APP_BOOST_NETWORK}/admin.macaroon
+      WALLET_PASSWORD_FILE: /data/lnd/wallet-password
       DRY_RUN: "true"
-      SENDER_NAME: "Daniel"
+      SENDER_NAME: ""
       MAX_PAYMENT_SATS: "50000"
       # Optional Podcast Index search (leave empty to disable)
       PODCASTINDEX_KEY: ""
       PODCASTINDEX_SECRET: ""
+
+  lnd:
+    image: lightninglabs/lnd:v0.21.6-beta@sha256:54b3c87ad0bc3fea3fab8af23ace6421147ea97e6b56bf3911592d7853c185b8
+    entrypoint: ["/bin/sh", "-c"]
+    # Add auto-unlock only once the setup screen has written the password file.
+    command:
+      - 'if [ -s /data/.lnd/wallet-password ]; then exec lnd $$0 --wallet-unlock-password-file=/data/.lnd/wallet-password --wallet-unlock-allow-create; else exec lnd $$0; fi'
+      - "${APP_BOOST_LND_COMMAND}"
+    user: "1000:1000"
+    restart: unless-stopped
+    stop_grace_period: 1m
+    # No ports published: reachable only by the web container on Umbrel's internal network.
+    volumes:
+      - ${APP_DATA_DIR}/data/lnd:/data/.lnd
+    environment:
+      HOME: /data
+    networks:
+      default:
+        ipv4_address: $APP_BOOST_LND_IP

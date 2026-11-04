@@ -6,6 +6,7 @@ const { resolveInvoice } = require('./lib/lnurl');
 const { createLnd } = require('./lib/lnd');
 const { createHistory } = require('./lib/history');
 const { createShows } = require('./lib/shows');
+const { createWallet, READY } = require('./lib/wallet');
 const { request, getJson } = require('./lib/http');
 
 function config(env = process.env) {
@@ -13,12 +14,15 @@ function config(env = process.env) {
     port: Number(env.PORT || 8080),
     dataDir: env.DATA_DIR || '/data',
     dryRun: String(env.DRY_RUN ?? 'true').toLowerCase() !== 'false',
-    senderName: env.SENDER_NAME || 'Field Lab',
+    senderName: env.SENDER_NAME ?? 'Field Lab',
     maxSats: Number(env.MAX_PAYMENT_SATS || 50000),
     piKey: env.PODCASTINDEX_KEY || '', piSecret: env.PODCASTINDEX_SECRET || '',
     piBase: env.PODCASTINDEX_BASE || 'https://api.podcastindex.org/api/1.0',
     allowHttp: env.ALLOW_HTTP_LOCAL === 'true', // tests only
-    lnd: { rest: env.LND_REST || 'https://10.21.21.9:8080', certPath: env.TLS_CERT_PATH || '/lnd/tls.cert', macaroonPath: env.MACAROON_PATH || '/data/boost.macaroon' },
+    lnd: { rest: env.LND_REST || 'https://10.21.21.91:8080', certPath: env.TLS_CERT_PATH || '/data/lnd/tls.cert',
+      macaroonPath: env.MACAROON_PATH || '/data/boost-node.macaroon',
+      adminMacaroonPath: env.ADMIN_MACAROON_PATH || '/data/lnd/data/chain/bitcoin/mainnet/admin.macaroon' },
+    walletPasswordPath: env.WALLET_PASSWORD_FILE || '/data/lnd/wallet-password',
   };
 }
 
@@ -27,6 +31,7 @@ function createApp(cfg = config()) {
   const lnd = createLnd(cfg.lnd);
   const history = createHistory(cfg.dataDir);
   const shows = createShows(cfg.dataDir);
+  const wallet = createWallet({ lnd, cfg, history });
   const plans = new Map(); // planId -> plan, short-lived, requires explicit confirm
   const pub = path.join(__dirname, 'public');
   const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
@@ -51,10 +56,12 @@ function createApp(cfg = config()) {
   const routes = {
     'GET /api/status': async () => ({ dryRun: cfg.dryRun, search: !!(cfg.piKey && cfg.piSecret), maxSats: cfg.maxSats, senderName: cfg.senderName }),
     'GET /api/summary': async () => {
+      const state = await lnd.state();
+      if (!READY.includes(state)) return { ready: false, state };
       const [info, cb, ch] = await Promise.all([lnd.getInfo(), lnd.channelBalance(), lnd.listChannels()]);
       const chans = ch.channels || [];
       return {
-        alias: info.alias, pubkey: info.identity_pubkey, synced: info.synced_to_chain, activeChannels: info.num_active_channels,
+        ready: true, state, alias: info.alias, pubkey: info.identity_pubkey, synced: info.synced_to_chain, activeChannels: info.num_active_channels,
         localSats: Number(cb.local_balance?.sat ?? cb.balance ?? 0), remoteSats: Number(cb.remote_balance?.sat ?? 0),
         channels: chans.map(c => ({ peer: c.remote_pubkey?.slice(0, 12) + '…', active: c.active, local: Number(c.local_balance), remote: Number(c.remote_balance), capacity: Number(c.capacity) })),
       };
@@ -140,6 +147,13 @@ function createApp(cfg = config()) {
       return { invoice: inv.payment_request, paymentHash: hash, sats, memo };
     },
     'GET /api/invoice': async (q) => { const i = await lnd.lookupInvoice(String(q.get('hash')).replace(/[^0-9a-f]/gi, '')); return { settled: i.state === 'SETTLED' || i.settled === true, state: i.state }; },
+    'GET /api/wallet': async () => wallet.status(),
+    'POST /api/wallet/seed': async () => wallet.seed(),
+    'POST /api/wallet/init': async (_q, b) => wallet.init(b),
+    'POST /api/wallet/address': async () => wallet.address(),
+    'GET /api/channel/peers': async () => ({ peers: wallet.PEERS, defaultSats: 500000 }),
+    'POST /api/channel/preview': async (_q, b) => wallet.preview(b),
+    'POST /api/channel/open': async (_q, b) => wallet.open(b),
     'GET /api/shows': async () => ({ shows: shows.list() }),
     'POST /api/shows': async (_q, b) => shows.add(b),
     'POST /api/shows/remove': async (_q, b) => ({ removed: shows.remove(String(b.feedUrl || '')) }),
