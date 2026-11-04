@@ -38,7 +38,7 @@ test('keysend payload: preimage record, sha256 hash, boost + custom records', ()
   assert.equal(ks.body.payment_hash, crypto.createHash('sha256').update(pre).digest('base64'));
   assert.equal(ks.paymentHashHex, crypto.createHash('sha256').update(pre).digest('hex'));
   const b = JSON.parse(Buffer.from(r['7629169'], 'base64'));
-  assert.equal(b.action, 'boost'); assert.equal(b.app_name, 'Field Lab Boost'); assert.equal(b.value_msat_total, 10000); assert.equal(b.message, 'hi');
+  assert.equal(b.action, 'boost'); assert.equal(b.app_name, 'Dirty Boost Whore'); assert.equal(b.value_msat_total, 10000); assert.equal(b.message, 'hi');
   assert.equal(Buffer.from(r['696969'], 'base64').toString(), 'abc');
   assert.equal(Buffer.from(ks.body.dest, 'base64').toString('hex'), '02' + 'aa'.repeat(32));
   assert.equal(ks.body.amt, '5');
@@ -49,4 +49,23 @@ test('lnurl helpers', () => {
   assert.equal(lnaddressToUrl('Bob@example.com'), 'https://example.com/.well-known/lnurlp/bob');
   // LUD-01 example
   assert.equal(decodeLnurl('LNURL1DP68GURN8GHJ7UM9WFMXJCM99E3K7MF0V9CXJ0M385EKVCENXC6R2C35XVUKXEFCV5MKVV34X5EKZD3EV56NYD3HXQURZEPEXEJXXEPNXSCRVWFNV9NXZCN9XQ6XYEFHVGCXXCMYXYMNSERXFQ5FNS'), 'https://service.com/api?q=3fc3645b439ce8e7f2553a69e5267081d96dcd340693afabe04be7b0ccd178df');
+});
+
+test('shows: add/list/dedupe/remove', () => {
+  const { createShows } = require('../lib/shows');
+  const dir = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'shows-'));
+  const s = createShows(dir);
+  assert.deepEqual(s.list(), []);
+  s.add({ name: 'Zed Show', feedUrl: 'https://z.example/feed', artwork: 'https://z.example/a.jpg' });
+  s.add({ name: 'Alpha', feedUrl: 'https://a.example/feed', artwork: 'javascript:alert(1)' });
+  assert.deepEqual(s.list().map(x => x.name), ['Alpha', 'Zed Show']);
+  assert.equal(s.list()[0].artwork, '');
+  s.add({ name: 'Zed Renamed', feedUrl: 'https://z.example/feed' });
+  assert.equal(s.list().length, 2);
+  assert.throws(() => s.add({ name: 'x', feedUrl: 'ftp://nope' }));
+  assert.throws(() => s.add({ name: '', feedUrl: 'https://ok.example' }));
+  assert.equal(createShows(dir).list().length, 2); // persisted
+  assert.equal(s.remove('https://a.example/feed'), true);
+  assert.equal(s.remove('https://a.example/feed'), false);
+  assert.deepEqual(s.list().map(x => x.name), ['Zed Renamed']);
 });

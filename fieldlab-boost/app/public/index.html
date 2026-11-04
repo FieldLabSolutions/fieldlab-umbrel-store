@@ -1,13 +1,15 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Field Lab Boost</title><link rel="stylesheet" href="style.css"></head><body>
-<header><h1>⚡ Field Lab Boost</h1><div id="dry" class="badge hidden">DRY RUN – no sats move</div>
+<title>Dirty Boost Whore</title><link rel="icon" type="image/svg+xml" href="favicon.svg"><link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png"><link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png"><meta name="theme-color" content="#0d0d12"><link rel="stylesheet" href="style.css"></head><body>
+<header><h1><img src="favicon.svg" alt="" class="logo"> Dirty Boost Whore</h1><div id="dry" class="badge hidden">DRY RUN – no sats move</div>
 <div id="summary" class="card small">Loading node…</div></header>
 <nav><button data-tab="boost" class="active">Boost</button><button data-tab="pay">Pay</button><button data-tab="receive">Receive</button><button data-tab="history">History</button></nav>
 <main>
 <section id="tab-boost">
-  <div class="card"><div id="searchBox" class="hidden"><input id="q" placeholder="Search Podcast Index"><button id="btnSearch">Search</button><div id="results"></div></div>
+  <div class="card"><label>Saved podcasts<select id="saved"></select></label><button id="btnRemoveSaved" class="hidden">Remove from my podcasts</button>
+  <div id="searchBox" class="hidden"><input id="q" placeholder="Search Podcast Index"><button id="btnSearch">Search</button><div id="results"></div></div>
   <input id="feedUrl" placeholder="Paste RSS feed URL" inputmode="url"><button id="btnFeed">Load feed</button></div>
   <div id="show" class="card hidden"><div class="row"><img id="art" alt="" referrerpolicy="no-referrer"><div><h2 id="showTitle"></h2><div id="showAuthor" class="muted"></div></div></div>
+    <button id="btnSaveShow" class="hidden">☆ Save to my podcasts</button>
     <label>Episode<select id="episode"></select></label>
     <label>Amount (sats)<input id="boostSats" type="number" inputmode="numeric" value="100"></label>
     <div class="chips"><button data-amt="100">100</button><button data-amt="500">500</button><button data-amt="1000">1k</button><button data-amt="5000">5k</button></div>

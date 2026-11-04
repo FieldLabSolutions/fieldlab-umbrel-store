@@ -1,4 +1,4 @@
-# Field Lab Boost (v0.1.0) — local-only Umbrel app
+# Dirty Boost Whore (v0.1.0) — local-only Umbrel app
 
 Phone-friendly dark web UI for the Umbrel LND node:
 - **Boost**: search Podcast Index (optional) or paste an RSS feed → shows show/artwork/episode and the

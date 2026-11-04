@@ -6,7 +6,7 @@ function buildBoostRecord(o) {
   return {
     podcast: o.podcast, feedID: o.feedID, guid: o.podcastGuid, url: o.feedUrl,
     episode: o.episode, episode_guid: o.episodeGuid, action: 'boost',
-    app_name: 'Field Lab Boost', app_version: '0.1.0',
+    app_name: 'Dirty Boost Whore', app_version: '0.1.0',
     value_msat: o.valueMsat, value_msat_total: o.valueMsatTotal,
     sender_name: o.senderName, message: o.message, name: o.recipientName,
     ts: o.ts,

@@ -1,10 +1,10 @@
 manifestVersion: 1
 id: fieldlab-boost
 category: bitcoin
-name: Field Lab Boost
+name: Dirty Boost Whore
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-boost/icon.png
-version: "0.1.0"
-tagline: Podcasting 2.0 boosts, keysend and invoices from your node
+version: "0.1.1"
+tagline: Dirty Boost Whore – Podcasting 2.0 boosts, keysend and invoices from your node
 description: >-
   Local-only web app for your Umbrel Lightning node. Search Podcast Index or paste an RSS
   feed, review the show's value block payees and splits, and send boosts (keysend or
@@ -21,6 +21,6 @@ gallery: []
 path: ""
 defaultUsername: ""
 defaultPassword: ""
-releaseNotes: "First version (local network only, dry-run default)."
+releaseNotes: "Renamed to Dirty Boost Whore, new favicon, saved-podcasts pulldown, and fixed live sending on newer LND (uses the router send endpoint)."
 submitter: Field Lab
 submission: ""

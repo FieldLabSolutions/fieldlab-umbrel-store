@@ -5,6 +5,7 @@ const { buildKeysend, buildBoostRecord } = require('./lib/keysend');
 const { resolveInvoice } = require('./lib/lnurl');
 const { createLnd } = require('./lib/lnd');
 const { createHistory } = require('./lib/history');
+const { createShows } = require('./lib/shows');
 const { request, getJson } = require('./lib/http');
 
 function config(env = process.env) {
@@ -25,9 +26,10 @@ function createApp(cfg = config()) {
   fs.mkdirSync(cfg.dataDir, { recursive: true });
   const lnd = createLnd(cfg.lnd);
   const history = createHistory(cfg.dataDir);
+  const shows = createShows(cfg.dataDir);
   const plans = new Map(); // planId -> plan, short-lived, requires explicit confirm
   const pub = path.join(__dirname, 'public');
-  const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
+  const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
 
   const checkSats = s => { s = Math.floor(Number(s)); if (!(s > 0)) throw new Error('Enter an amount in sats'); if (s > cfg.maxSats) throw new Error(`Over the ${cfg.maxSats} sat safety limit`); return s; };
 
@@ -138,6 +140,9 @@ function createApp(cfg = config()) {
       return { invoice: inv.payment_request, paymentHash: hash, sats, memo };
     },
     'GET /api/invoice': async (q) => { const i = await lnd.lookupInvoice(String(q.get('hash')).replace(/[^0-9a-f]/gi, '')); return { settled: i.state === 'SETTLED' || i.settled === true, state: i.state }; },
+    'GET /api/shows': async () => ({ shows: shows.list() }),
+    'POST /api/shows': async (_q, b) => shows.add(b),
+    'POST /api/shows/remove': async (_q, b) => ({ removed: shows.remove(String(b.feedUrl || '')) }),
     'GET /api/history': async () => ({ items: history.list() }),
   };
 
@@ -152,7 +157,7 @@ function createApp(cfg = config()) {
       return;
     }
     if (req.method !== 'GET') return send(404, { error: 'Not found' });
-    const f = path.normalize(path.join(pub, u.pathname === '/' ? 'index.html' : u.pathname));
+    const f = path.normalize(path.join(pub, u.pathname === '/' ? 'index.html' : u.pathname === '/favicon.ico' ? 'favicon-32.png' : u.pathname));
     if (!f.startsWith(pub) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) return send(404, { error: 'Not found' });
     res.writeHead(200, { 'content-type': TYPES[path.extname(f)] || 'application/octet-stream' });
     fs.createReadStream(f).pipe(res);
@@ -161,6 +166,6 @@ function createApp(cfg = config()) {
 
 if (require.main === module) {
   const cfg = config();
-  createApp(cfg).listen(cfg.port, () => console.log(`Field Lab Boost on :${cfg.port} (DRY_RUN=${cfg.dryRun}, LND ${cfg.lnd.rest})`));
+  createApp(cfg).listen(cfg.port, () => console.log(`Dirty Boost Whore on :${cfg.port} (DRY_RUN=${cfg.dryRun}, LND ${cfg.lnd.rest})`));
 }
 module.exports = { createApp, config };
