@@ -27,7 +27,7 @@ services:
       MACAROON_PATH: /data/boost-node.macaroon
       ADMIN_MACAROON_PATH: /data/lnd/data/chain/bitcoin/${APP_BOOST_NETWORK}/admin.macaroon
       WALLET_PASSWORD_FILE: /data/lnd/wallet-password
-      DRY_RUN: "true"
+      DRY_RUN: "false"
       SENDER_NAME: ""
       MAX_PAYMENT_SATS: "50000"
       # Optional Podcast Index search (leave empty to disable)
