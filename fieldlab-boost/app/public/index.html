@@ -26,7 +26,16 @@
   <div id="wSetup" class="card hidden"><h2>Set up the boost wallet</h2>
     <p class="small">This app runs its own Lightning wallet, separate from your main node. You'll get 24 words. They are the only backup. They are shown <b>once</b> and never saved by the app.</p>
     <p class="small bad"><b>Uninstalling this app deletes this wallet.</b> Without the 24 words the funds are gone.</p>
-    <button id="btnGenSeed" class="primary">Create wallet</button></div>
+    <button id="btnGenSeed" class="primary">Create wallet</button> <button id="btnShowRestore">Restore from 24 words</button></div>
+  <div id="wRestore" class="card hidden"><h2>Restore from 24 words</h2>
+    <p class="small">Type your 24 words in order, separated by spaces. They stay in this page's memory only, go straight to the wallet node, and are cleared right after. The app never saves or logs them.</p>
+    <p class="small">The 24 words bring back <b>on-chain</b> funds only. Channel funds need the channel backup file (you can upload it after the restore).</p>
+    <textarea id="restoreWords" rows="4" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="word1 word2 … word24"></textarea>
+    <div id="restoreCount" class="small muted">0 / 24 words</div>
+    <label>Seed passphrase (optional, only if you set one)<input id="restorePass" type="password" autocomplete="off"></label>
+    <button id="btnRestore" class="primary">Restore wallet</button><button id="btnRestoreCancel">Cancel</button></div>
+  <div id="wRestart" class="card hidden"><h2 class="bad">Restart the app in Umbrel now</h2>
+    <p>Wallet reset is pending. Open Umbrel, long-press <b>Dirty Boost Whore</b> → <b>Restart</b>. On restart the old wallet is wiped (a copy of its channel backup is kept in <span class="mono">data/lnd/channel-backup/</span>), then this tab offers Create or Restore.</p></div>
   <div id="wSeed" class="card hidden"><h2>Write these 24 words down</h2><p class="small bad">On paper. No photos, screenshots, chat or cloud.</p>
     <ol id="seedWords" class="seed"></ol>
     <label class="check"><input type="checkbox" id="seedOk"> I wrote them down, in order</label>
@@ -43,7 +52,20 @@
       <label>Amount (sats)<input id="chanSats" type="number" inputmode="numeric" value="500000"></label>
       <label class="check"><input type="checkbox" id="chanPrivate" checked> Private (unannounced) channel</label>
       <button id="btnChanPreview" class="primary">Review channel</button><div id="chanPreview"></div></div>
+    <div class="card"><h2>Channel backup</h2>
+      <div id="scbBanner" class="warn hidden">You have channels but haven't downloaded a channel backup in this session.</div>
+      <p class="small"><b>Download the channel backup after opening, closing, or changing channels, and store it off this box.</b></p>
+      <p class="small">The 24 words recover on-chain funds only. The channel backup is what gets channel funds back (the peers force-close and pay you on-chain).</p>
+      <div id="scbInfo" class="small muted"></div>
+      <button id="btnScbDownload" class="primary">Download channel backup</button>
+      <details><summary class="small">Restore channels from a backup file (after a wallet restore)</summary>
+        <input id="scbFile" type="file" accept=".backup,application/octet-stream"><button id="btnScbRestore">Restore channels from file</button></details></div>
   </div>
+  <div id="wDanger" class="card danger-zone hidden"><h2 class="bad">Danger zone: Reset wallet</h2>
+    <p class="small bad">This erases the wallet from this app. Funds can only be recovered with your 24 words. Open channels would be lost (the app refuses while any exist).</p>
+    <label>Type <b>RESET WALLET</b> to confirm<input id="resetPhrase" autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
+    <label class="check"><input type="checkbox" id="resetOverride"> I understand this wallet has funds</label>
+    <button id="btnReset" class="danger">Reset wallet</button></div>
 </section>
 </main><div id="toast" class="hidden"></div>
 <script src="vendor/qrcode.js"></script><script src="app.js"></script></body></html>

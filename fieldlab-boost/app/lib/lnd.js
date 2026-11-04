@@ -12,10 +12,11 @@ const BAKE_PERMISSIONS = [
 const redact = m => String(m).replace(/[0-9a-f]{40,}/gi, '[redacted]');
 
 // Thin LND REST client. Macaroons are only ever placed in request headers.
-function createLnd({ rest, certPath, macaroonPath, adminMacaroonPath }) {
+function createLnd({ rest, certPath, macaroonPath, adminMacaroonPath, blocked = () => false }) {
   let ca, macHex, baking;
   const loadCa = () => { if (!ca && certPath && fs.existsSync(certPath)) ca = fs.readFileSync(certPath); return ca; };
   function ensureMacaroon() {
+    if (blocked()) return Promise.reject(new Error('LND: wallet reset pending, restart the app in Umbrel'));
     if (macHex) return Promise.resolve(macHex);
     return baking || (baking = loadOrBake().finally(() => { baking = null; }));
   }
@@ -57,7 +58,14 @@ function createLnd({ rest, certPath, macaroonPath, adminMacaroonPath }) {
     state: async () => { try { return (await call('GET', '/v1/state', null, { auth: false })).state || 'UNKNOWN'; } catch { return 'UNREACHABLE'; } },
     genSeed: () => call('GET', '/v1/genseed', null, { auth: false }),
     initWallet: (passwordBuf, mnemonic) => call('POST', '/v1/initwallet', { wallet_password: passwordBuf.toString('base64'), cipher_seed_mnemonic: mnemonic }, { auth: false }),
+    // Restore: same initwallet call with the user's words. Caller must not log the body.
+    restoreWallet: (passwordBuf, mnemonic, passphrase, recoveryWindow) => call('POST', '/v1/initwallet', { wallet_password: passwordBuf.toString('base64'), cipher_seed_mnemonic: mnemonic,
+      ...(passphrase ? { aezeed_passphrase: Buffer.from(passphrase).toString('base64') } : {}), recovery_window: recoveryWindow }, { auth: false }),
     ensureMacaroon,
+    forgetMacaroon: () => { macHex = null; },
+    recoveryInfo: () => call('GET', '/v1/getrecoveryinfo'),
+    exportBackup: () => call('GET', '/v1/channels/backup'),
+    restoreBackup: multiB64 => call('POST', '/v1/channels/backup/restore', { multi_chan_backup: multiB64 }),
     getInfo: () => call('GET', '/v1/getinfo'),
     channelBalance: () => call('GET', '/v1/balance/channels'),
     walletBalance: () => call('GET', '/v1/balance/blockchain'),

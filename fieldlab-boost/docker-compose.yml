@@ -37,9 +37,12 @@ services:
   lnd:
     image: lightninglabs/lnd:v0.21.6-beta@sha256:54b3c87ad0bc3fea3fab8af23ace6421147ea97e6b56bf3911592d7853c185b8
     entrypoint: ["/bin/sh", "-c"]
-    # Add auto-unlock only once the setup screen has written the password file.
+    # 1) Wallet reset: the web app only writes RESET_PENDING (never deletes while LND runs). On the next
+    #    start, before LND launches, keep a copy of channel.backup, then wipe wallet state (data/chain,
+    #    data/graph, wallet-password). tls.cert/tls.key are kept.
+    # 2) Add auto-unlock only once the setup screen has written the password file.
     command:
-      - 'if [ -s /data/.lnd/wallet-password ]; then exec lnd $$0 --wallet-unlock-password-file=/data/.lnd/wallet-password --wallet-unlock-allow-create; else exec lnd $$0; fi'
+      - 'if [ -f /data/.lnd/RESET_PENDING ]; then mkdir -p /data/.lnd/channel-backup; for f in /data/.lnd/data/chain/bitcoin/*/channel.backup; do if [ -f "$$f" ]; then cp "$$f" /data/.lnd/channel-backup/pre-reset-$$(date +%Y%m%d%H%M%S).backup; fi; done; rm -rf /data/.lnd/data/chain /data/.lnd/data/graph /data/.lnd/wallet-password && rm -f /data/.lnd/RESET_PENDING && echo "wallet reset done"; fi; if [ -s /data/.lnd/wallet-password ]; then exec lnd $$0 --wallet-unlock-password-file=/data/.lnd/wallet-password --wallet-unlock-allow-create; else exec lnd $$0; fi'
       - "${APP_BOOST_LND_COMMAND}"
     user: "1000:1000"
     restart: unless-stopped

@@ -1,4 +1,4 @@
-# Dirty Boost Whore (v0.2.0) — local-only Umbrel app with its own Lightning wallet
+# Dirty Boost Whore (v0.3.0) — local-only Umbrel app with its own Lightning wallet
 
 > ## ⚠️ UNINSTALLING THIS APP DELETES ITS WALLET AND SEED
 > The boost wallet lives in `~/umbrel/app-data/fieldlab-boost/data/lnd`. Umbrel deletes that folder on uninstall.
@@ -17,6 +17,36 @@ Phone-friendly dark web UI for the Umbrel LND node:
 Runs on stock `node:20-alpine` with the app folder mounted; no npm deps (QR lib vendored, MIT).
 **`DRY_RUN=true` is the default** — no sats move until it is set to `"false"`. `MAX_PAYMENT_SATS` caps any single action (default 50,000).
 
+
+## What's new in 0.3.0: restore, reset, channel backup (Wallet tab)
+**What each backup recovers:** the 24 words recover **on-chain funds only**. Channel funds need the
+**channel backup** (SCB). Download it after opening, closing, or changing channels, and store it off this box.
+
+- **Restore from 24 words** (shown when no wallet exists): words + optional aezeed passphrase are validated
+  client- and server-side (24 words, trimmed, lowercased, letters only), held in memory only, never logged,
+  stored, or echoed in errors, and the arrays are cleared after use. Server writes a fresh random
+  `wallet-password` (600, same as create) and calls `POST /v1/initwallet` with `cipher_seed_mnemonic`,
+  `aezeed_passphrase` (if given) and `recovery_window: 2500`. The tab then shows sync status/block height
+  (`/v1/getinfo`), rescan progress (`/v1/getrecoveryinfo`) and balances, refreshing every 15 s until done.
+- **Reset wallet** (separate danger zone): type `RESET WALLET`. The server **refuses** if LND reports any open or
+  pending channel (`/v1/channels`, `/v1/channels/pending`, incl. closing/force-closing), and refuses if there is any
+  on-chain or Lightning balance (or the wallet is locked, so it can't check) unless the
+  "I understand this wallet has funds" box is ticked.
+  - **Design: marker file, wipe on next start.** LND holds `wallet.db`/`macaroons.db` open, so deleting them
+    while it runs is unsafe (it can rewrite them, and it keeps serving the old wallet until restarted). The web app
+    therefore only writes `data/lnd/RESET_PENDING`, deletes its own `boost-node.macaroon`, and blocks all
+    authenticated LND calls. The UI shows **"Restart the app in Umbrel now"** (the app cannot restart containers).
+  - On the next start the `lnd` container entrypoint (docker-compose.yml) sees the marker, copies
+    `channel.backup` to `data/lnd/channel-backup/pre-reset-<time>.backup`, removes `data/chain` (wallet.db,
+    macaroons.db, macaroons, channel.backup), `data/graph` and `wallet-password`, deletes the marker, then starts LND
+    with no wallet. `tls.cert`/`tls.key` are kept.
+- **Channel backup:** "Download channel backup" → `GET /api/backup/download` → LND `GET /v1/channels/backup`,
+  served as binary `dirty-boost-channels-<YYYY-MM-DD>.backup` (the raw multi-channel backup). After a wallet restore,
+  upload it under "Restore channels from a backup file" → `POST /v1/channels/backup/restore` with
+  `multi_chan_backup` (asks for a confirm). The tab shows when LND's own `channel.backup` last changed, keeps a copy in
+  `data/lnd/channel-backup/channel-latest.backup` when it changes, and shows a warning banner when channels exist and
+  no backup was downloaded in this browser session.
+- Unchanged: `DRY_RUN=true` default, boosts, pay, invoices, create-wallet flow.
 
 ## What's new in 0.2.0: one app, two containers
 | Container | What it is |

@@ -3,7 +3,7 @@ id: fieldlab-boost
 category: bitcoin
 name: Dirty Boost Whore
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-boost/icon.png
-version: "0.2.1"
+version: "0.3.0"
 tagline: Podcasting 2.0 boosts from its own separate Lightning wallet
 description: >-
   Local-only web app with its own built-in LND wallet (separate seed, separate channels,
@@ -23,6 +23,6 @@ gallery: []
 path: ""
 defaultUsername: ""
 defaultPassword: ""
-releaseNotes: "Own separate LND wallet: Wallet tab with first-run setup, on-chain deposit QR, private channel open. Boosts now pay from this wallet, not your main node. UNINSTALL DELETES THIS WALLET – write down the 24 words."
+releaseNotes: "Wallet tab: restore from 24 words (with rescan progress), guarded Reset wallet (type RESET WALLET; refuses with channels; funds need an extra tick; wipe happens on next app restart), and channel backup download/restore. The 24 words recover on-chain funds only; download the channel backup after every channel change."
 submitter: Field Lab
 submission: ""

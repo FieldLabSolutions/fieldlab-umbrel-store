@@ -106,10 +106,18 @@ $('btnRemoveSaved').onclick = guard(async () => {
 let setup = null, peers = [], chanPlan = null;
 async function loadWallet() {
   const w = await api('wallet');
-  ['wSetup', 'wSeed', 'wReady'].forEach(id => $(id).classList.add('hidden'));
+  ['wSetup', 'wSeed', 'wReady', 'wRestore', 'wRestart', 'wDanger'].forEach(id => $(id).classList.add('hidden'));
+  if (w.resetPending) { $('wState').innerHTML = '<span class="bad">Reset pending: restart the app in Umbrel now.</span>'; $('wRestart').classList.remove('hidden'); return; }
+  if (w.state !== 'NON_EXISTING' && w.state !== 'UNREACHABLE') $('wDanger').classList.remove('hidden');
   if (w.state === 'NON_EXISTING') { $('wState').innerHTML = 'No boost wallet yet.'; if (setup) $('wSeed').classList.remove('hidden'); else $('wSetup').classList.remove('hidden'); return; }
   if (!w.ready) { $('wState').innerHTML = w.state === 'UNREACHABLE' ? 'Wallet node is starting… try again in a minute.' : `Wallet is ${esc(w.state.toLowerCase())}…` + (w.unlockFile ? '' : ' <span class="bad">(no unlock file)</span>'); return; }
-  $('wState').innerHTML = `<span class="ok">Boost wallet ready</span> · ${w.channels} channel${w.channels === 1 ? '' : 's'}${w.pendingOpen ? ` · ${w.pendingOpen} opening` : ''}`;
+  const sy = w.sync ? (w.sync.synced ? ` · <span class="ok">synced</span> at block ${fmt(w.sync.height)}` : ` · <span class="bad">syncing</span> (block ${fmt(w.sync.height)})`) : '';
+  const rec = w.recovery && w.recovery.active && !w.recovery.finished ? ` · rescanning for your coins ${Math.round(w.recovery.progress * 100)}%` : '';
+  if (rec || (w.sync && !w.sync.synced)) setTimeout(() => { if (!$('tab-wallet').classList.contains('hidden')) guard(loadWallet)(); }, 15000);
+  const b = w.backup || {};
+  $('scbInfo').textContent = b.exists ? `LND's channel.backup last changed ${new Date(b.modified).toLocaleString()}${b.copy ? ' (copy kept in data/lnd/channel-backup/)' : ''}.` : 'No channel.backup file yet (appears after the first channel).';
+  $('scbBanner').classList.toggle('hidden', !((w.channels || w.pendingAny) && !sessionStorage.getItem('scbDownloaded')));
+  $('wState').innerHTML = `<span class="ok">Boost wallet ready</span>${sy}${rec} · ${w.channels} channel${w.channels === 1 ? '' : 's'}${w.pendingOpen ? ` · ${w.pendingOpen} opening` : ''}`;
   $('wBal').innerHTML = `<h2>Balances</h2><table><tr><td>On-chain confirmed</td><td class="r"><b>${fmt(w.onchain.confirmed)}</b></td></tr><tr><td>On-chain unconfirmed</td><td class="r">${fmt(w.onchain.unconfirmed)}</td></tr><tr><td>Ready for a channel (3+ conf)</td><td class="r">${fmt(w.onchain.spendable3)}</td></tr><tr><td>Lightning can send</td><td class="r"><b>${fmt(w.lightning.local)}</b></td></tr><tr><td>Lightning can receive</td><td class="r">${fmt(w.lightning.remote)}</td></tr></table>`;
   $('wReady').classList.remove('hidden');
   if (!peers.length) { const p = await api('channel/peers'); peers = p.peers; $('chanSats').value = p.defaultSats;
@@ -150,5 +158,36 @@ $('btnChanPreview').onclick = guard(async () => {
     $('chanPreview').innerHTML = `<p>${r.status === 'dry-run' ? 'Dry run: nothing was sent.' : 'Channel opening. Funding tx: <span class="mono">' + esc(r.txid || '') + '</span>'}</p>`;
     loadWallet();
   });
+});
+const countWords = () => { const n = $('restoreWords').value.trim().split(/\s+/).filter(Boolean).length; $('restoreCount').textContent = `${n} / 24 words`; return n; };
+const clearRestore = () => { $('restoreWords').value = ''; $('restorePass').value = ''; countWords(); };
+$('restoreWords').oninput = countWords;
+$('btnShowRestore').onclick = () => { $('wSetup').classList.add('hidden'); $('wRestore').classList.remove('hidden'); };
+$('btnRestoreCancel').onclick = () => { clearRestore(); $('wRestore').classList.add('hidden'); $('wSetup').classList.remove('hidden'); };
+$('btnRestore').onclick = guard(async () => {
+  const words = $('restoreWords').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length !== 24) throw new Error(`Enter exactly 24 words (got ${words.length})`);
+  if (words.some(w => !/^[a-z]{3,8}$/.test(w))) throw new Error('Words must be letters only');
+  try { await api('wallet/restore', { words, passphrase: $('restorePass').value }); }
+  finally { words.fill(''); clearRestore(); }
+  toast('Saved: wallet restored, rescanning for your coins…'); setTimeout(guard(async () => { await loadWallet(); await init(); }), 2000);
+});
+$('btnReset').onclick = guard(async () => {
+  if ($('resetPhrase').value !== 'RESET WALLET') throw new Error('Type RESET WALLET exactly');
+  if (!confirm('Reset this wallet? Only your 24 words can recover its funds.')) return;
+  await api('wallet/reset', { phrase: $('resetPhrase').value, override: $('resetOverride').checked });
+  $('resetPhrase').value = ''; $('resetOverride').checked = false; await loadWallet();
+});
+$('btnScbDownload').onclick = guard(async () => {
+  const r = await fetch('api/backup/download'); if (!r.ok) throw new Error((await r.json()).error || 'Error');
+  const name = (r.headers.get('content-disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'dirty-boost-channels.backup';
+  const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = name; a.click(); URL.revokeObjectURL(a.href);
+  sessionStorage.setItem('scbDownloaded', '1'); $('scbBanner').classList.add('hidden'); toast('Saved: ' + name + ' – store it off this box');
+});
+$('btnScbRestore').onclick = guard(async () => {
+  const f = $('scbFile').files[0]; if (!f) throw new Error('Choose the .backup file first');
+  if (!confirm('Restore channels from this backup? Your peers will be asked to force-close and pay you on-chain.')) return;
+  const bytes = new Uint8Array(await f.arrayBuffer()); let bin = ''; bytes.forEach(x => { bin += String.fromCharCode(x); });
+  await api('backup/restore', { backup: btoa(bin), confirm: true }); $('scbFile').value = ''; toast('Saved: channel backup submitted to LND');
 });
 guard(init)(); guard(loadSaved)();

@@ -6,7 +6,7 @@ const { resolveInvoice } = require('./lib/lnurl');
 const { createLnd } = require('./lib/lnd');
 const { createHistory } = require('./lib/history');
 const { createShows } = require('./lib/shows');
-const { createWallet, READY } = require('./lib/wallet');
+const { createWallet, walletPaths, READY } = require('./lib/wallet');
 const { request, getJson } = require('./lib/http');
 
 function config(env = process.env) {
@@ -28,7 +28,8 @@ function config(env = process.env) {
 
 function createApp(cfg = config()) {
   fs.mkdirSync(cfg.dataDir, { recursive: true });
-  const lnd = createLnd(cfg.lnd);
+  const resetMarker = walletPaths(cfg).marker;
+  const lnd = createLnd({ ...cfg.lnd, blocked: () => fs.existsSync(resetMarker) });
   const history = createHistory(cfg.dataDir);
   const shows = createShows(cfg.dataDir);
   const wallet = createWallet({ lnd, cfg, history });
@@ -150,6 +151,9 @@ function createApp(cfg = config()) {
     'GET /api/wallet': async () => wallet.status(),
     'POST /api/wallet/seed': async () => wallet.seed(),
     'POST /api/wallet/init': async (_q, b) => wallet.init(b),
+    'POST /api/wallet/restore': async (_q, b) => wallet.restore(b),
+    'POST /api/wallet/reset': async (_q, b) => wallet.reset(b),
+    'POST /api/backup/restore': async (_q, b) => wallet.backupRestore(b),
     'POST /api/wallet/address': async () => wallet.address(),
     'GET /api/channel/peers': async () => ({ peers: wallet.PEERS, defaultSats: 500000 }),
     'POST /api/channel/preview': async (_q, b) => wallet.preview(b),
@@ -163,6 +167,11 @@ function createApp(cfg = config()) {
   return http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
     const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(obj)); };
+    if (req.method === 'GET' && u.pathname === '/api/backup/download') {
+      try { const f = await wallet.backupDownload();
+        res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename="${f.name}"`, 'cache-control': 'no-store' }); return res.end(f.data);
+      } catch (e) { console.error(`GET ${u.pathname}: ${e.message}`); return send(400, { error: e.message }); }
+    }
     const h = routes[`${req.method} ${u.pathname}`];
     if (h) {
       let raw = ''; for await (const c of req) { raw += c; if (raw.length > 1e5) return send(413, { error: 'Too large' }); }

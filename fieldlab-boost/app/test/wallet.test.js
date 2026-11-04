@@ -16,7 +16,7 @@ async function boot({ dryRun = true } = {}) {
   const app = createApp(cfg); await new Promise(r => app.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${app.address().port}/api/`;
   const api = async (p, body) => { const r = await fetch(base + p, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}); return { ok: r.ok, ...(await r.json()) }; };
-  return { m, api, dir, logs, close: () => { console.error = origErr; console.log = origLog; app.closeAllConnections(); app.close(); m.srv.closeAllConnections(); m.close(); } };
+  return { m, api, dir, logs, base, close: () => { console.error = origErr; console.log = origLog; app.closeAllConnections(); app.close(); m.srv.closeAllConnections(); m.close(); } };
 }
 
 test('uninitialised wallet: summary is calm, setup flow, macaroon baked, seed never persisted', async () => {
@@ -74,4 +74,84 @@ for (const dryRun of [true, false]) test(`channel open DRY_RUN=${dryRun}`, async
 test('parseUri', () => {
   assert.deepEqual(parseUri('03' + 'a'.repeat(64) + '@1.2.3.4:9735'), { pubkey: '03' + 'a'.repeat(64), host: '1.2.3.4:9735' });
   assert.throws(() => parseUri('04' + 'a'.repeat(64) + '@x:1'));
+});
+
+const SEED = 'abandon ability able about above absent absorb abstract absurd abuse access accident account accuse achieve acid acoustic acquire across act action actor actress actual'.split(' ');
+const filesAndLogs = t => fs.readdirSync(t.dir, { recursive: true }).filter(f => fs.statSync(path.join(t.dir, f)).isFile()).map(f => fs.readFileSync(path.join(t.dir, f), 'latin1')).join('\n') + t.logs.join('\n');
+
+test('restore validation (client words checked server-side)', async () => {
+  const t = await boot();
+  try {
+    assert.match((await t.api('wallet/restore', { words: SEED.slice(0, 23) })).error, /exactly 24 words \(got 23\)/);
+    const bad = [...SEED]; bad[4] = 'ab0ve';
+    const r = await t.api('wallet/restore', { words: bad }); assert.match(r.error, /Word #5/); assert.ok(!r.error.includes('ab0ve'));
+    assert.equal(t.m.st.initBody, null, 'LND not called on invalid input');
+    assert.ok(!filesAndLogs(t).includes('acoustic'));
+  } finally { t.close(); }
+});
+
+test('restore calls initwallet with mnemonic, passphrase, recovery_window; nothing persisted', async () => {
+  const t = await boot();
+  try {
+    const messy = '  ' + SEED.map(w => w.toUpperCase()).join('  \n ') + ' ';
+    const r = await t.api('wallet/restore', { words: messy, passphrase: 'pp-secret' }); assert.equal(r.ok, true, JSON.stringify(r));
+    const b = t.m.st.initBody;
+    assert.deepEqual(b.cipher_seed_mnemonic, SEED); assert.equal(b.recovery_window, 2500);
+    assert.equal(Buffer.from(b.aezeed_passphrase, 'base64').toString(), 'pp-secret');
+    const pwFile = path.join(t.dir, 'lnd', 'wallet-password');
+    assert.equal(fs.statSync(pwFile).mode & 0o777, 0o600); assert.equal(fs.readFileSync(pwFile, 'utf8'), t.m.st.initPassword); assert.match(t.m.st.initPassword, /^[0-9a-f]{64}$/);
+    assert.notEqual(r.recoveryWindow, undefined); assert.ok(!JSON.stringify(r).includes('abandon'));
+    const w = await t.api('wallet'); assert.equal(w.ready, true); assert.equal(w.sync.height, 870000); assert.equal(w.recovery.active, true); assert.equal(w.onchain.confirmed, 700000);
+    const all = filesAndLogs(t);
+    for (const s of ['acoustic', 'acquire across', 'pp-secret']) assert.ok(!all.includes(s), s); // no file or log holds words/passphrase
+    assert.ok(!t.logs.join('\n').includes(t.m.st.initPassword));
+    assert.equal(fs.readFileSync(path.join(t.dir, 'history.json'), 'utf8').includes('abandon'), false);
+    assert.match((await t.api('wallet/restore', { words: SEED })).error, /already exists/);
+  } finally { t.close(); }
+});
+
+test('reset guards: phrase, channels, funds override, marker + restart state', async () => {
+  const t = await boot();
+  try {
+    await t.api('wallet/restore', { words: SEED });
+    assert.match((await t.api('wallet/reset', { phrase: 'reset wallet', override: true })).error, /Type RESET WALLET/);
+    const r1 = await t.api('wallet/reset', { phrase: 'RESET WALLET', override: true }); assert.match(r1.error, /1 open and 0 pending/);
+    t.m.st.channels = []; t.m.st.opened.push({});
+    assert.match((await t.api('wallet/reset', { phrase: 'RESET WALLET', override: true })).error, /0 open and 1 pending/);
+    t.m.st.opened = [];
+    const r2 = await t.api('wallet/reset', { phrase: 'RESET WALLET' }); assert.match(r2.error, /720,000 sats on-chain.*150,000 sats in Lightning/);
+    const marker = path.join(t.dir, 'lnd', 'RESET_PENDING'); assert.equal(fs.existsSync(marker), false);
+    assert.ok(fs.existsSync(path.join(t.dir, 'boost-node.macaroon')));
+    const r3 = await t.api('wallet/reset', { phrase: 'RESET WALLET', override: true }); assert.equal(r3.ok, true); assert.equal(r3.restartRequired, true);
+    assert.ok(fs.existsSync(marker)); assert.equal(fs.existsSync(path.join(t.dir, 'boost-node.macaroon')), false);
+    const w = await t.api('wallet'); assert.equal(w.state, 'RESET_PENDING');
+    assert.match((await t.api('wallet/address', {})).error, /reset pending/);
+    assert.match((await t.api('wallet/restore', { words: SEED })).error, /restart the app/);
+  } finally { t.close(); }
+});
+
+test('reset with empty wallet needs no override', async () => {
+  const t = await boot();
+  try {
+    await t.api('wallet/restore', { words: SEED });
+    t.m.st.channels = []; t.m.st.onchain = { confirmed_balance: '0', unconfirmed_balance: '0' }; t.m.st.local = '0';
+    assert.equal((await t.api('wallet/reset', { phrase: 'RESET WALLET' })).ok, true);
+  } finally { t.close(); }
+});
+
+test('channel backup download + restore upload + channel.backup surfaced', async () => {
+  const t = await boot();
+  try {
+    await t.api('wallet/restore', { words: SEED });
+    const r = await fetch(t.base + 'backup/download'); assert.equal(r.status, 200);
+    assert.match(r.headers.get('content-disposition'), /attachment; filename="dirty-boost-channels-\d{4}-\d\d-\d\d\.backup"/);
+    assert.equal(Buffer.from(await r.arrayBuffer()).toString(), 'SCB-MOCK-' + 'x'.repeat(40));
+    const w = await t.api('wallet'); assert.ok(w.backup.lastDownload);
+    assert.equal(w.backup.exists, false);
+    fs.writeFileSync(path.join(t.dir, 'lnd', 'channel.backup'), 'scbfile');
+    const w2 = await t.api('wallet'); assert.equal(w2.backup.exists, true); assert.ok(fs.existsSync(path.join(t.dir, 'lnd', 'channel-backup', 'channel-latest.backup')));
+    const b64 = Buffer.from('SCB-UPLOAD-' + 'y'.repeat(30)).toString('base64');
+    assert.equal((await t.api('backup/restore', { backup: b64 })).ok, false, 'needs confirm');
+    assert.equal((await t.api('backup/restore', { backup: b64, confirm: true })).ok, true); assert.deepEqual(t.m.st.restoredScb, [b64]);
+  } finally { t.close(); }
 });
