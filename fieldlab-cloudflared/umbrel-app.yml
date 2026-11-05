@@ -1,0 +1,24 @@
+manifestVersion: 1
+id: fieldlab-cloudflared
+category: networking
+name: Cloudflare Tunnel (Field Lab)
+icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-cloudflared/icon.png
+version: "0.1.0"
+tagline: Outbound-only Cloudflare Tunnel connector for Node Master
+description: >-
+  Runs the cloudflared connector for the node-master tunnel. Outbound connection only,
+  no ports opened. The tunnel token lives in this app's data folder (data/token) and is
+  never stored in the store repo. Access is gated by Cloudflare Access.
+developer: Field Lab
+website: ""
+dependencies: []
+repo: ""
+support: ""
+port: 8744
+gallery: []
+path: ""
+defaultUsername: ""
+defaultPassword: ""
+releaseNotes: "First release."
+submitter: Field Lab
+submission: ""

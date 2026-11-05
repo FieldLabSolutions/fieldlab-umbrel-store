@@ -1,0 +1,11 @@
+version: "3.7"
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    user: "1000:1000"
+    restart: unless-stopped
+    network_mode: host
+    command: ["tunnel", "--no-autoupdate", "run", "--token-file", "/token"]
+    volumes:
+      - ${APP_DATA_DIR}/data/token:/token:ro
