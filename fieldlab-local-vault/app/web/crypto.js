@@ -1,8 +1,9 @@
 // Every content field and original filename is encrypted in the browser.
 export const ITERATIONS = 600000;
 export const MAX_FILE = 128 * 1024 * 1024;
-export const utf8 = new TextEncoder();
+export const UNFILED_NOTE_TITLE = 'Unfiled files';
 const decoder = new TextDecoder();
+export const utf8 = new TextEncoder();
 export const b64 = b => {
   const a = new Uint8Array(b); let s = '';
   for (let i = 0; i < a.length; i += 8192) s += String.fromCharCode(...a.subarray(i, i + 8192));
@@ -31,10 +32,60 @@ export async function sealIndex(key, index, vaultId) {
   const box = await encrypt(key, utf8.encode(JSON.stringify(index)), `local-vault:1:index:${vaultId}`);
   return {iv: box.iv, ciphertext: b64(box.ciphertext)};
 }
+function validateAttachments(attachments) {
+  if (!Array.isArray(attachments)) throw Error('Invalid encrypted index');
+  for (const a of attachments) {
+    if (typeof a.id !== 'string' || typeof a.label !== 'string' || typeof a.description !== 'string'
+      || typeof a.name !== 'string' || typeof a.iv !== 'string' || !Number.isSafeInteger(a.size)) throw Error('Invalid encrypted index');
+  }
+}
 export async function openIndex(key, envelope) {
   const raw = await decrypt(key, unb64(envelope.ciphertext), envelope.iv, `local-vault:1:index:${envelope.vaultId}`);
   const data = JSON.parse(decoder.decode(raw));
-  if (data.version !== 1 || !Array.isArray(data.notes) || !Array.isArray(data.files)) throw Error('Invalid encrypted index');
-  return data;
+  if (data.version === 1) {
+    if (!Array.isArray(data.notes) || !Array.isArray(data.files)) throw Error('Invalid encrypted index');
+    return data;
+  }
+  if (data.version === 2) {
+    if (!Array.isArray(data.notes)) throw Error('Invalid encrypted index');
+    for (const n of data.notes) validateAttachments(n.attachments || []);
+    return data;
+  }
+  throw Error('Unsupported vault index version');
+}
+export function migrateIndexToV2(data) {
+  const notes = structuredClone(data.notes || []);
+  const legacy = data.version === 1 ? (data.files || []) : [];
+  let changed = data.version !== 2;
+  for (const n of notes) {
+    if (!Array.isArray(n.attachments)) { n.attachments = []; changed = true; }
+  }
+  if (legacy.length) {
+    let unfiled = notes.find(n => n.title === UNFILED_NOTE_TITLE);
+    if (!unfiled) {
+      unfiled = {
+        id: crypto.randomUUID(),
+        title: UNFILED_NOTE_TITLE,
+        body: 'Attachments migrated from standalone files in an earlier vault format.',
+        updated: new Date().toISOString(),
+        attachments: []
+      };
+      notes.push(unfiled);
+    }
+    for (const f of legacy) {
+      unfiled.attachments.push({
+        id: f.id,
+        label: f.name,
+        description: '',
+        name: f.name,
+        type: f.type || 'application/octet-stream',
+        size: f.size,
+        iv: f.iv,
+        added: f.added || new Date().toISOString()
+      });
+    }
+    changed = true;
+  }
+  return {index: {version: 2, notes}, changed};
 }
 export const fileAAD = (vaultId, fileId) => `local-vault:1:file:${vaultId}:${fileId}`;
