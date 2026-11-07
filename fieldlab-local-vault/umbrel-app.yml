@@ -3,7 +3,7 @@ id: fieldlab-local-vault
 category: files
 name: Field Lab Vault
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-local-vault/icon.png
-version: "1.0.3"
+version: "1.0.4"
 tagline: Local-only encrypted notes and files with browser-side WebCrypto
 description: >-
   Personal ciphertext-only vault: AES-256-GCM notes and attachments (up to 128 MiB each),
@@ -29,6 +29,10 @@ path: ""
 defaultUsername: ""
 defaultPassword: ""
 releaseNotes: >-
+  1.0.4: Add a wallet backup type with BIP39 English word entry (12/24 plus 15/18/21), bundled
+  wordlist, 4-letter auto-fill, checksum validation, optional BIP39 passphrase, hidden-by-default
+  words, and file attachments. Search matches wallet name/notes only, never seed words. Browser
+  favicon and apple-touch icon on the HTTPS vault and HTTP landing pages.
   1.0.3: Files live inside notes with encrypted label and description. Attach from the note editor;
   search matches labels and descriptions. Existing standalone files migrate into an "Unfiled files"
   note on unlock. Export/import supports the new structure and still reads 1.0.x backups.

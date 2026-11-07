@@ -1,10 +1,14 @@
 {
   "passed": [
+    "Canonical BIP39 English wordlist SHA-256 and length",
     "Unauthenticated access, hostile Origin and hostile Host rejected",
     "Cross-site landing-page link may open vault UI; API still blocked cross-site",
+    "Favicon and apple-touch icon served on HTTPS vault and HTTP landing",
     "First-run password setup and browser WebCrypto in HTTPS",
     "Create, edit and full-text search notes",
     "Note attachments with encrypted label/description and search",
+    "BIP39 checksum vectors, 4-letter autofill map, and non-word rejection",
+    "Wallet UI save, checksum display, search excludes seed words, invalid word flagged",
     "101 MiB attachment roundtrip (128 MiB limit)",
     "Lock wipes DOM; wrong password rejected; correct unlock restores content",
     "AES-GCM roundtrip, wrong-key rejection and tamper rejection",
@@ -13,6 +17,7 @@
     "Whole-vault encrypted export contains no test-note plaintext",
     "Legacy v1 standalone files migrate into Unfiled files on unlock",
     "Wrong backup password imports nothing",
+    "Wallet export roundtrip in encrypted backup",
     "v2 export imported into separately keyed fresh vault; note attachments preserved",
     "Legacy 1.0.x encrypted backup imports with attachments inside notes",
     "Note deletion cancel/confirm and attachment deletion",

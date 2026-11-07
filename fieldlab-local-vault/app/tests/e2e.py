@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Repeatable browser integration tests; synthetic content only, isolated temp data."""
 import base64
+import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import ssl
 import subprocess
@@ -13,7 +15,9 @@ import urllib.error
 from playwright.sync_api import sync_playwright, expect
 
 ROOT = Path(__file__).resolve().parents[1]  # fieldlab-local-vault/app
+BIP39_WORDLIST_SHA256 = '2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda'
 PASSWORD = 'synthetic test passphrase only 2026'
+WALLET_LABEL = 'Synthetic test wallet only 7c2a'
 MARKER = 'synthetic-note-content-934af16b'
 passed = []
 def ok(name):
@@ -60,6 +64,14 @@ def open_note(page, title_substring=''):
     else:
         page.locator('#notes button').first.click()
 
+def open_wallet(page, title_substring=''):
+    page.locator('#wallets button').filter(has_text=title_substring).click()
+
+def fill_valid_test_mnemonic(page):
+    words = ['abandon'] * 11 + ['about']
+    for i, word in enumerate(words):
+        page.locator('.wallet-word').nth(i).fill(word)
+
 def main():
     with tempfile.TemporaryDirectory(prefix='local-vault-test-') as tmp:
         tmp = Path(tmp)
@@ -72,6 +84,10 @@ def main():
                 p = subprocess.Popen(['python3',str(ROOT/'server.py')], env=env, stdout=subprocess.DEVNULL)
                 procs.append(p); wait_ready(origin,p)
             origin = 'https://127.0.0.1:18449'
+            wl = ROOT / 'web' / 'bip39-english.txt'
+            assert hashlib.sha256(wl.read_bytes()).hexdigest() == BIP39_WORDLIST_SHA256
+            assert len(wl.read_text().splitlines()) == 2048
+            ok('Canonical BIP39 English wordlist SHA-256 and length')
             assert request(origin,'/api/vault')[0] == 401
             assert request(origin,'/api/setup','POST',b'{}',{'Origin':'https://evil.invalid','Content-Type':'application/json'})[0] == 403
             assert request(origin,'/api/status',headers={'Host':'evil.invalid'})[0] == 403
@@ -86,6 +102,35 @@ def main():
             assert status == 200 and b'<!doctype html>' in body.lower()
             assert request(origin, '/api/status', headers=landing_nav)[0] == 403
             ok('Cross-site landing-page link may open vault UI; API still blocked cross-site')
+            for icon_path in ('/favicon.ico', '/favicon-32x32.png', '/apple-touch-icon.png'):
+                status, _ = request(origin, icon_path)
+                assert status == 200, icon_path
+            status, body = request(origin, '/')
+            assert b'apple-touch-icon' in body and b'favicon.ico' in body
+            landing_http_port = 18080
+            land_origin = 'https://127.0.0.1:18500'
+            land_env = {
+                **os.environ,
+                'VAULT_DATA': str(tmp / 'dataLanding'),
+                'VAULT_BIND': '127.0.0.1',
+                'VAULT_PORT': '18500',
+                'VAULT_HTTP_PORT': str(landing_http_port),
+                'VAULT_CERT': str(tmp / 'test.crt'),
+                'VAULT_KEY': str(tmp / 'test.key'),
+            }
+            land_env.pop('VAULT_ORIGIN', None)
+            land_proc = subprocess.Popen(['python3', str(ROOT / 'server.py')], env=land_env, stdout=subprocess.DEVNULL)
+            procs.append(land_proc)
+            wait_ready(land_origin, land_proc)
+            landing_http = f'http://127.0.0.1:{landing_http_port}'
+            for icon_path in ('/favicon.ico', '/favicon-32x32.png', '/apple-touch-icon.png'):
+                req = urllib.request.Request(landing_http + icon_path)
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    assert r.status == 200, icon_path
+            with urllib.request.urlopen(urllib.request.Request(landing_http + '/'), timeout=10) as r:
+                landing_body = r.read()
+            assert b'apple-touch-icon' in landing_body and b'favicon.ico' in landing_body
+            ok('Favicon and apple-touch icon served on HTTPS vault and HTTP landing')
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
                 context = browser.new_context(ignore_https_errors=True, accept_downloads=True)
@@ -129,6 +174,39 @@ def main():
                 downloaded = info.value
                 assert Path(downloaded.path()).read_bytes() == payload
                 ok('Note attachments with encrypted label/description and search')
+                assert page.evaluate('''async () => {
+                  const b = await import('/bip39.js');
+                  if (!b.assertPrefixUniqueness()) throw new Error('prefix uniqueness');
+                  const good = [...Array(11)].map(()=>'abandon').concat(['about']);
+                  const bad = Array(12).fill('abandon');
+                  if (!(await b.validateBip39Checksum(good)).valid) throw new Error('valid vector');
+                  if ((await b.validateBip39Checksum(bad)).valid) throw new Error('invalid vector');
+                  if (b.uniqueWordForPrefix('aban') !== 'abandon') throw new Error('autofill');
+                  if (b.isBip39Word('notabip39word')) throw new Error('reject');
+                  return true;
+                }''')
+                ok('BIP39 checksum vectors, 4-letter autofill map, and non-word rejection')
+                page.locator('#new-wallet').click()
+                page.locator('#wallet-name').fill(WALLET_LABEL)
+                page.locator('#wallet-notes').fill('m/84h/0h/0h synthetic fixture path')
+                page.locator('.wallet-word').first.fill('aban')
+                expect(page.locator('.wallet-word').first).to_have_value('abandon', timeout=5000)
+                fill_valid_test_mnemonic(page)
+                expect(page.locator('#wallet-checksum')).to_have_class('checksum-status valid', timeout=10000)
+                page.locator('.wallet-word').last.fill('zzzz')
+                page.locator('.wallet-word').last.blur()
+                expect(page.locator('.wallet-word').last).to_have_class(re.compile(r'invalid'))
+                page.locator('.wallet-word').last.fill('about')
+                page.get_by_role('button', name='Save wallet', exact=True).click()
+                expect(page.locator('#message')).to_have_text('Wallet saved.')
+                page.locator('#search').fill('abandon')
+                expect(page.locator('#wallets button')).to_have_count(0)
+                page.locator('#search').fill('7c2a')
+                expect(page.locator('#wallets button')).to_have_count(1)
+                ok('Wallet UI save, checksum display, search excludes seed words, invalid word flagged')
+                page.locator('#search').fill('')
+                open_note(page, 'Node recovery')
+                expect(page.locator('#note-attach')).to_be_attached(timeout=10000)
                 # Larger than the requested 100MB threshold.
                 large = tmp/'large.bin'
                 with large.open('wb') as f:
@@ -173,7 +251,6 @@ def main():
                 }''',PASSWORD)
                 assert concurrency == 409
                 ok('Stale revision cannot overwrite newer vault')
-                import hashlib
                 cfg = json.loads(request(origin,'/api/status')[1])
                 bits = hashlib.pbkdf2_hmac('sha256',PASSWORD.encode(),base64.b64decode(cfg['salt']),600000,64)
                 token = base64.b64encode(bits[32:]).decode()
@@ -195,6 +272,9 @@ def main():
                   let index = await c.openIndex(derived.key, env);
                   const files = [];
                   for (const n of index.notes) for (const a of n.attachments || []) {
+                    files.push({id:a.id,name:a.name,type:a.type,size:a.size,iv:a.iv,added:a.added});
+                  }
+                  for (const w of index.wallets || []) for (const a of w.attachments || []) {
                     files.push({id:a.id,name:a.name,type:a.type,size:a.size,iv:a.iv,added:a.added});
                   }
                   index = {version:1, notes:[], files};
@@ -223,7 +303,13 @@ def main():
                 other.locator('#import').set_input_files(str(backup))
                 other.locator('#backup-password').fill(PASSWORD)
                 other.get_by_role('button',name='Import copies',exact=True).click()
-                expect(other.locator('#message')).to_have_text('Imported 1 note(s) and 2 attachment(s) as copies.',timeout=90000)
+                expect(other.locator('#message')).to_contain_text('Imported 1 note(s)', timeout=90000)
+                expect(other.locator('#message')).to_contain_text('1 wallet', timeout=15000)
+                expect(other.locator('#wallets button')).to_have_count(1, timeout=15000)
+                open_wallet(other, 'Synthetic test')
+                expect(other.locator('#wallet-name')).to_have_value(WALLET_LABEL)
+                expect(other.locator('#wallet-checksum')).to_contain_text('valid', timeout=15000)
+                ok('Wallet export roundtrip in encrypted backup')
                 open_note(other, 'Node recovery')
                 expect(other.locator('#note-body')).to_have_value(MARKER+' updated')
                 with other.expect_download() as info:
@@ -278,6 +364,8 @@ def main():
                         assert PASSWORD.encode() not in raw
                         assert b'Node recovery test note' not in raw
                         assert b'test.channel.backup' not in raw
+                        assert b'abandon' not in raw
+                        assert WALLET_LABEL.encode() not in raw
             ok('Server disk contains no plaintext notes, original filenames or master password')
         finally:
             for proc in procs:
