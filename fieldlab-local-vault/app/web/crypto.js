@@ -39,6 +39,13 @@ function validateAttachments(attachments) {
       || typeof a.name !== 'string' || typeof a.iv !== 'string' || !Number.isSafeInteger(a.size)) throw Error('Invalid encrypted index');
   }
 }
+function validateWallet(wallet) {
+  if (typeof wallet.id !== 'string' || typeof wallet.name !== 'string' || typeof wallet.notes !== 'string') throw Error('Invalid encrypted index');
+  if (![12, 15, 18, 21, 24].includes(wallet.wordCount)) throw Error('Invalid encrypted index');
+  if (!Array.isArray(wallet.words) || wallet.words.length !== wallet.wordCount) throw Error('Invalid encrypted index');
+  if (typeof wallet.passphrase !== 'string') throw Error('Invalid encrypted index');
+  validateAttachments(wallet.attachments || []);
+}
 export async function openIndex(key, envelope) {
   const raw = await decrypt(key, unb64(envelope.ciphertext), envelope.iv, `local-vault:1:index:${envelope.vaultId}`);
   const data = JSON.parse(decoder.decode(raw));
@@ -46,9 +53,13 @@ export async function openIndex(key, envelope) {
     if (!Array.isArray(data.notes) || !Array.isArray(data.files)) throw Error('Invalid encrypted index');
     return data;
   }
-  if (data.version === 2) {
+  if (data.version === 2 || data.version === 3) {
     if (!Array.isArray(data.notes)) throw Error('Invalid encrypted index');
     for (const n of data.notes) validateAttachments(n.attachments || []);
+    if (data.version === 3) {
+      if (!Array.isArray(data.wallets)) throw Error('Invalid encrypted index');
+      for (const w of data.wallets) validateWallet(w);
+    }
     return data;
   }
   throw Error('Unsupported vault index version');
@@ -87,5 +98,25 @@ export function migrateIndexToV2(data) {
     changed = true;
   }
   return {index: {version: 2, notes}, changed};
+}
+export function migrateIndexToCurrent(data) {
+  if (data.version === 3) {
+    const index = structuredClone(data);
+    let changed = false;
+    for (const n of index.notes) {
+      if (!Array.isArray(n.attachments)) { n.attachments = []; changed = true; }
+    }
+    if (!Array.isArray(index.wallets)) { index.wallets = []; changed = true; }
+    for (const w of index.wallets) {
+      if (!Array.isArray(w.attachments)) { w.attachments = []; changed = true; }
+    }
+    return {index, changed};
+  }
+  const step = migrateIndexToV2(data);
+  let index = step.index;
+  let changed = step.changed;
+  index = {...index, version: 3, wallets: []};
+  changed = true;
+  return {index, changed};
 }
 export const fileAAD = (vaultId, fileId) => `local-vault:1:file:${vaultId}:${fileId}`;

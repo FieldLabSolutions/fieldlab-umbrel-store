@@ -31,7 +31,20 @@ MAX_FILE = 128 * 1024 * 1024 + 16
 MAX_INDEX = 8 * 1024 * 1024
 ID = re.compile(r'^[0-9a-f-]{36}$')
 # Top-level document navigations from the HTTP landing page (different port) use cross-site fetches.
-NAV_STATIC_PATHS = frozenset({'/', '/index.html', '/app.js', '/crypto.js', '/style.css'})
+NAV_STATIC_PATHS = frozenset({
+    '/', '/index.html', '/app.js', '/crypto.js', '/style.css',
+    '/favicon.ico', '/favicon-32x32.png', '/apple-touch-icon.png',
+})
+FAVICON_LINKS = (
+    '<link rel="icon" href="/favicon.ico" sizes="any">'
+    '<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">'
+    '<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">'
+)
+FAVICON_STATIC = {
+    '/favicon.ico': ('favicon.ico', 'image/x-icon'),
+    '/favicon-32x32.png': ('favicon-32x32.png', 'image/png'),
+    '/apple-touch-icon.png': ('apple-touch-icon.png', 'image/png'),
+}
 
 LANDING_STYLE = """\
 body{font-family:system-ui,sans-serif;max-width:42rem;margin:2rem auto;padding:0 1rem;line-height:1.5;color:#111}
@@ -175,7 +188,20 @@ class LandingHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if self.path not in ('/', '/index.html'):
+        path = self.path.split('?', 1)[0].split('#', 1)[0]
+        if path in FAVICON_STATIC:
+            name, kind = FAVICON_STATIC[path]
+            raw = (ROOT / 'web' / name).read_bytes()
+            self.send_response(200)
+            self.send_header('Content-Type', kind)
+            self.send_header('Content-Length', str(len(raw)))
+            self.send_header('Cache-Control', 'public, max-age=86400')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            self.wfile.write(raw)
+            return
+        if path not in ('/', '/index.html'):
             self.send_error(404)
             return
         forwarded = self.headers.get('X-Forwarded-Host') or self.headers.get('Host', 'localhost')
@@ -184,7 +210,7 @@ class LandingHandler(BaseHTTPRequestHandler):
         fingerprint = cert_sha256_fingerprint()
         body = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Field Lab Vault</title><style>{LANDING_STYLE}</style></head>
+<title>Field Lab Vault</title>{FAVICON_LINKS}<style>{LANDING_STYLE}</style></head>
 <body><h1>Field Lab Vault</h1>
 <p class="muted">This page is only a pointer. Passwords and secrets are never entered over plain HTTP.</p>
 <p>WebCrypto requires a <strong>secure context</strong> (HTTPS). Open the vault on your home LAN using the link below, verify the certificate fingerprint, then create or unlock your vault there.</p>
@@ -353,8 +379,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             static = {
                 '/': ('index.html', 'text/html; charset=utf-8'),
+                '/favicon.ico': ('favicon.ico', 'image/x-icon'),
+                '/favicon-32x32.png': ('favicon-32x32.png', 'image/png'),
+                '/apple-touch-icon.png': ('apple-touch-icon.png', 'image/png'),
                 '/app.js': ('app.js', 'text/javascript'),
                 '/crypto.js': ('crypto.js', 'text/javascript'),
+                '/bip39.js': ('bip39.js', 'text/javascript'),
+                '/bip39-data.js': ('bip39-data.js', 'text/javascript'),
+                '/bip39-english.txt': ('bip39-english.txt', 'text/plain; charset=utf-8'),
                 '/style.css': ('style.css', 'text/css'),
             }
             if self.path not in static:
