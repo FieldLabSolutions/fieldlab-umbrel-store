@@ -42,7 +42,7 @@ def wait_ready(origin, proc):
 
 def create(page, origin):
     page.goto(origin)
-    expect(page.locator('#gate-title')).to_have_text('Create your private vault')
+    expect(page.locator('#gate-title')).to_have_text('Create your private vault', timeout=30000)
     page.locator('#password').fill(PASSWORD)
     page.locator('#confirm-password').fill(PASSWORD)
     page.locator('#unlock-submit').click()
@@ -53,6 +53,12 @@ def unlock(page, password=PASSWORD):
     page.locator('#unlock-submit').click()
     if password == PASSWORD:
         expect(page.locator('#workspace')).to_be_visible(timeout=30000)
+
+def open_note(page, title_substring=''):
+    if title_substring:
+        page.locator('#notes button').filter(has_text=title_substring).click()
+    else:
+        page.locator('#notes button').first.click()
 
 def main():
     with tempfile.TemporaryDirectory(prefix='local-vault-test-') as tmp:
@@ -104,23 +110,34 @@ def main():
                 page.get_by_role('button',name='Save note',exact=True).click()
                 expect(page.locator('#message')).to_have_text('Note saved.')
                 ok('Create, edit and full-text search notes')
+                open_note(page, 'Node recovery')
                 payload = b'\x00\xff\x80Synthetic channel backup test only\x00' * 25000
-                page.locator('#upload').set_input_files({'name':'test.channel.backup','mimeType':'application/octet-stream','buffer':payload})
-                expect(page.locator('#message')).to_have_text('1 file(s) encrypted and saved.',timeout=30000)
+                page.locator('#note-attach').set_input_files({'name':'test.channel.backup','mimeType':'application/octet-stream','buffer':payload})
+                expect(page.locator('#message')).to_have_text('File attached.',timeout=30000)
+                page.locator('#note-attachments').get_by_role('button', name='Edit', exact=True).click()
+                page.locator('#attachment-label').fill('synthetic-wallet-label')
+                page.locator('#attachment-description').fill('synthetic description phrase 88aa')
+                page.get_by_role('button', name='Save details', exact=True).click()
+                expect(page.locator('#message')).to_have_text('Attachment details saved.')
+                page.locator('#search').fill('88aa')
+                expect(page.locator('#notes button')).to_have_count(1)
+                page.locator('#search').fill('synthetic-wallet-label')
+                expect(page.locator('#notes button')).to_have_count(1)
+                page.locator('#search').fill('')
                 with page.expect_download() as info:
-                    page.locator('#files').get_by_role('button',name='Download',exact=True).click()
+                    page.locator('#note-attachments').get_by_role('button',name='Download',exact=True).click()
                 downloaded = info.value
                 assert Path(downloaded.path()).read_bytes() == payload
-                ok('Arbitrary binary attachment encrypt/upload/download/decrypt byte-for-byte')
+                ok('Note attachments with encrypted label/description and search')
                 # Larger than the requested 100MB threshold.
                 large = tmp/'large.bin'
                 with large.open('wb') as f:
                     f.truncate(101*1024*1024)
-                page.evaluate('''() => {const input=document.getElementById('upload'); const dt=new DataTransfer();dt.items.add(new File([new Uint8Array(101*1024*1024)],'large.bin',{type:'application/octet-stream'}));input.files=dt.files;input.dispatchEvent(new Event('change'));}''')
-                expect(page.locator('#message')).to_have_text('1 file(s) encrypted and saved.',timeout=90000)
-                expect(page.locator('#files .file')).to_have_count(2)
+                page.evaluate('''() => {const input=document.getElementById('note-attach'); const dt=new DataTransfer();dt.items.add(new File([new Uint8Array(101*1024*1024)],'large.bin',{type:'application/octet-stream'}));input.files=dt.files;input.dispatchEvent(new Event('change'));}''')
+                expect(page.locator('#message')).to_have_text('File attached.',timeout=90000)
+                expect(page.locator('#note-attachments .note-attachment')).to_have_count(2)
                 with page.expect_download(timeout=90000) as info:
-                    page.locator('#files .file').filter(has_text='large.bin').get_by_role('button',name='Download',exact=True).click()
+                    page.locator('#note-attachments .note-attachment').filter(has_text='large.bin').last.get_by_role('button',name='Download',exact=True).click()
                 assert Path(info.value.path()).stat().st_size == large.stat().st_size
                 assert Path(info.value.path()).read_bytes() == large.read_bytes()
                 ok('101 MiB attachment roundtrip (128 MiB limit)')
@@ -169,6 +186,32 @@ def main():
                 assert backup.read_bytes().startswith(b'LVBAK001')
                 assert MARKER.encode() not in backup.read_bytes()
                 ok('Whole-vault encrypted export contains no test-note plaintext')
+                page.evaluate('''async (password) => {
+                  const c = await import('/crypto.js');
+                  const status = await (await fetch('/api/status')).json();
+                  const derived = await c.derive(password, status.salt);
+                  const headers = {Authorization: `Bearer ${derived.token}`};
+                  const env = await (await fetch('/api/vault', {headers})).json();
+                  let index = await c.openIndex(derived.key, env);
+                  const files = [];
+                  for (const n of index.notes) for (const a of n.attachments || []) {
+                    files.push({id:a.id,name:a.name,type:a.type,size:a.size,iv:a.iv,added:a.added});
+                  }
+                  index = {version:1, notes:[], files};
+                  const box = await c.sealIndex(derived.key, index, status.vaultId);
+                  const body = {version:1, vaultId:status.vaultId, salt:status.salt, iterations:600000, iv:box.iv, ciphertext:box.ciphertext, revision:env.revision+1, authHash:env.authHash};
+                  const r = await fetch('/api/vault', {method:'PUT', headers:{...headers,'Content-Type':'application/json'}, body:JSON.stringify(body)});
+                  if (!r.ok) throw new Error('downgrade save failed');
+                }''', PASSWORD)
+                page.locator('#lock').click()
+                unlock(page)
+                expect(page.locator('#notes button').filter(has_text='Unfiled files')).to_have_count(1)
+                open_note(page, 'Unfiled')
+                expect(page.locator('#note-attachments')).to_contain_text('test.channel.backup')
+                ok('Legacy v1 standalone files migrate into Unfiled files on unlock')
+                with page.expect_download(timeout=90000) as info:
+                    page.locator('#export').click()
+                legacy_backup = tmp/'legacy-v1.lvbak'; info.value.save_as(legacy_backup)
                 page.locator('#import').set_input_files(str(backup))
                 page.locator('#backup-password').fill('incorrect backup password')
                 page.get_by_role('button',name='Import copies',exact=True).click()
@@ -180,24 +223,33 @@ def main():
                 other.locator('#import').set_input_files(str(backup))
                 other.locator('#backup-password').fill(PASSWORD)
                 other.get_by_role('button',name='Import copies',exact=True).click()
-                expect(other.locator('#message')).to_have_text('Imported 1 note(s) and 2 file(s) as copies.',timeout=90000)
-                other.locator('#notes button').click()
+                expect(other.locator('#message')).to_have_text('Imported 1 note(s) and 2 attachment(s) as copies.',timeout=90000)
+                open_note(other, 'Node recovery')
                 expect(other.locator('#note-body')).to_have_value(MARKER+' updated')
                 with other.expect_download() as info:
-                    other.locator('#files .file').filter(has_text='test.channel.backup').get_by_role('button',name='Download',exact=True).click()
+                    other.locator('#note-attachments .note-attachment').filter(has_text='synthetic-wallet-label').first.get_by_role('button',name='Download',exact=True).click()
                 assert Path(info.value.path()).read_bytes() == payload
-                ok('Export imported into separately keyed fresh vault; notes and attachment preserved')
+                ok('v2 export imported into separately keyed fresh vault; note attachments preserved')
+                other.locator('#import').set_input_files(str(legacy_backup))
+                other.locator('#backup-password').fill(PASSWORD)
+                other.get_by_role('button',name='Import copies',exact=True).click()
+                expect(other.locator('#message')).to_have_text('Imported 1 note(s) and 2 attachment(s) as copies.',timeout=90000)
+                open_note(other, 'Unfiled')
+                expect(other.locator('#note-attachments .note-attachment')).to_have_count(2)
+                ok('Legacy 1.0.x encrypted backup imports with attachments inside notes')
+                open_note(other, 'Node recovery')
                 other.once('dialog',lambda d:d.dismiss())
                 other.get_by_role('button',name='Delete note',exact=True).click()
-                expect(other.locator('#notes button')).to_have_count(1)
+                expect(other.locator('#notes button')).to_have_count(2)
                 other.once('dialog',lambda d:d.accept())
                 other.get_by_role('button',name='Delete note',exact=True).click()
                 expect(other.locator('#message')).to_have_text('Note deleted.')
-                expect(other.locator('#notes button')).to_have_count(0)
+                expect(other.locator('#notes button')).to_have_count(1)
+                open_note(other, 'Unfiled')
                 other.once('dialog',lambda d:d.accept())
-                other.locator('#files .file').filter(has_text='test.channel.backup').get_by_role('button',name='Delete',exact=True).click()
-                expect(other.locator('#message')).to_have_text('File deleted.')
-                expect(other.locator('#files .file')).to_have_count(1)
+                other.locator('#note-attachments .note-attachment').first.get_by_role('button',name='Delete',exact=True).click()
+                expect(other.locator('#message')).to_have_text('Attachment deleted.')
+                expect(other.locator('#note-attachments .note-attachment')).to_have_count(1)
                 ok('Note deletion cancel/confirm and attachment deletion')
                 # Advance browser clock rather than weakening production idle policy.
                 other.locator('#idle').select_option('1')
@@ -211,8 +263,8 @@ def main():
                 procs[0]=subprocess.Popen(['python3',str(ROOT/'server.py')],env=restarted_env,stdout=subprocess.DEVNULL)
                 wait_ready(origin,procs[0])
                 page.reload(); expect(page.locator('#gate-title')).to_have_text('Unlock your vault')
-                unlock(page); page.locator('#notes button').click()
-                expect(page.locator('#note-body')).to_have_value(MARKER+' updated')
+                unlock(page); open_note(page, 'Unfiled')
+                expect(page.locator('#note-attachments .note-attachment')).to_have_count(2)
                 ok('Vault survives server restart and correct password decrypts persistent state')
                 page.screenshot(path=str(ROOT/'tests'/'tested-ui.png'),full_page=True)
                 assert not errors, errors

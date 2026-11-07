@@ -1,12 +1,17 @@
-import {ITERATIONS, MAX_FILE, b64, unb64, random, derive, authHash, encrypt, decrypt, sealIndex, openIndex, fileAAD} from './crypto.js';
+import {ITERATIONS, MAX_FILE, b64, unb64, random, derive, authHash, encrypt, decrypt, sealIndex, openIndex, migrateIndexToV2, fileAAD} from './crypto.js';
 const $ = id => document.getElementById(id);
 let setup = false, session = null, busy = false, pendingImport = null, generation = 0;
 let lastActivity = Date.now(), dirty = false;
+let editingNoteId = null, editingAttachment = null;
 const urls = new Set();
 const message = text => { $('message').textContent = text; };
-const ensure = s => { if (!s || session !== s) throw Error('Vault locked. Unlock to continue.'); };
+const ensure = s => {
+  if (!s) throw Error('Vault locked. Unlock to continue.');
+  if (session && session !== s) throw Error('Vault locked. Unlock to continue.');
+};
+const formatMiB = size => `${(size / 1048576).toFixed(2)} MiB`;
 function controls() {
-  document.querySelectorAll('#workspace button, #workspace input, #workspace select, #import-form button').forEach(e => {e.disabled = busy;});
+  document.querySelectorAll('#workspace button, #workspace input, #workspace select, #import-form button, #attachment-form button').forEach(e => {e.disabled = busy;});
   $('unlock-submit').disabled = busy;
 }
 async function task(fn) {
@@ -27,11 +32,13 @@ async function api(path, options = {}, s = session) {
   return response;
 }
 function clearPlaintext() {
-  $('notes').replaceChildren(); $('files').replaceChildren(); $('editor').replaceChildren();
+  $('notes').replaceChildren(); $('editor').replaceChildren();
   $('search').value = ''; $('password').value = ''; $('confirm-password').value = ''; $('backup-password').value = '';
-  $('upload').value = ''; $('import').value = '';
+  { const el = document.getElementById('note-attach'); if (el) el.value = ''; }
+  $('import').value = '';
   if ($('import-dialog').open) $('import-dialog').close();
-  pendingImport = null;
+  if ($('attachment-dialog').open) $('attachment-dialog').close();
+  pendingImport = null; editingNoteId = null; editingAttachment = null;
   for (const url of urls) URL.revokeObjectURL(url);
   urls.clear(); dirty = false;
 }
@@ -43,6 +50,14 @@ function lock() {
   $('workspace').hidden = true; $('lock').hidden = true; $('gate').hidden = false;
   message(unsaved ? 'Locked. Unsaved note edits were discarded.' : 'Locked.');
   $('password').focus();
+}
+function noteHaystack(note) {
+  const parts = [note.title, note.body];
+  for (const a of note.attachments || []) parts.push(a.label, a.description, a.name);
+  return parts.join('\n').toLocaleLowerCase();
+}
+function allAttachments(index) {
+  return index.notes.flatMap(n => n.attachments || []);
 }
 async function init() {
   if (!isSecureContext || !crypto.subtle) {
@@ -72,7 +87,7 @@ $('unlock-form').addEventListener('submit', event => {
     const s = {...derived, config, abort: new AbortController(), index: null, revision: 0};
     let index;
     if (setup) {
-      index = {version: 1, notes: [], files: []};
+      index = {version: 2, notes: []};
       const box = await sealIndex(s.key, index, config.vaultId);
       const envelope = {...config, ...box, revision: 1, authHash: await authHash(s.token)};
       await api('/api/setup', {method: 'POST', body: JSON.stringify(envelope)}, null);
@@ -82,14 +97,22 @@ $('unlock-form').addEventListener('submit', event => {
       $('gate-help').textContent = 'Your password and decrypted content stay in this browser tab.';
     } else {
       const envelope = await (await api('/api/vault', {}, s)).json();
-      try { index = await openIndex(s.key, envelope); }
+      let opened;
+      try { opened = await openIndex(s.key, envelope); }
       catch { throw Error('Unable to decrypt: wrong password or damaged vault.'); }
+      const migrated = migrateIndexToV2(opened);
+      index = migrated.index;
       s.revision = envelope.revision;
+      if (migrated.changed) {
+        await save(s, index);
+        message('Vault index upgraded: files now live inside notes.');
+      }
     }
     if (generation !== stamp) {s.abort.abort(); return;}
     s.index = index; session = s; dirty = false; lastActivity = Date.now();
     $('gate').hidden = true; $('workspace').hidden = false; $('lock').hidden = false;
-    render(); message('Unlocked. Auto-lock is on. Export an encrypted backup after changes.');
+    render();
+    if (!setup) message('Unlocked. Auto-lock is on. Export an encrypted backup after changes.');
   });
 });
 async function save(s, index) {
@@ -100,48 +123,118 @@ async function save(s, index) {
   s.index = index; s.revision = envelope.revision;
 }
 function button(text, handler, cls = '') {
-  const b = document.createElement('button'); b.textContent = text; b.className = cls;
+  const b = document.createElement('button'); b.type = 'button'; b.textContent = text; b.className = cls;
   b.addEventListener('click', handler); return b;
 }
 function render() {
   const s = session; if (!s) return;
   const query = $('search').value.toLocaleLowerCase();
-  $('notes').replaceChildren(); $('files').replaceChildren();
-  for (const note of s.index.notes.filter(n => `${n.title}\n${n.body}`.toLocaleLowerCase().includes(query))) {
-    $('notes').append(button(note.title || 'Untitled note', () => editNote(note.id), 'item'));
-  }
-  for (const file of s.index.files.filter(f => f.name.toLocaleLowerCase().includes(query))) {
-    const row = document.createElement('div'); row.className = 'file';
-    const name = document.createElement('span'); name.textContent = file.name;
-    const size = document.createElement('small'); size.textContent = `${(file.size / 1048576).toFixed(2)} MiB`;
-    row.append(name, size, button('Download', () => task(() => downloadFile(file))), button('Delete', () => task(() => deleteFile(file)), 'danger'));
-    $('files').append(row);
+  $('notes').replaceChildren();
+  for (const note of s.index.notes.filter(n => !query || noteHaystack(n).includes(query))) {
+    const label = note.title || 'Untitled note';
+    const count = note.attachments?.length || 0;
+    const title = count ? `${label} (${count})` : label;
+    $('notes').append(button(title, () => editNote(note.id), 'item'));
   }
   if (!s.index.notes.length) $('notes').textContent = 'No notes yet.';
-  if (!s.index.files.length) $('files').textContent = 'No files yet.';
+}
+function currentNoteInIndex(noteId) {
+  return session.index.notes.find(n => n.id === noteId);
+}
+function persistNote(note) {
+  const s = session; ensure(s);
+  const index = structuredClone(s.index);
+  const pos = index.notes.findIndex(n => n.id === note.id);
+  const entry = {id: note.id, title: note.title, body: note.body, updated: new Date().toISOString(), attachments: structuredClone(note.attachments || [])};
+  if (pos < 0) index.notes.push(entry); else index.notes[pos] = entry;
+  return save(s, index);
+}
+function renderAttachments(container, note) {
+  container.replaceChildren();
+  const heading = document.createElement('h3'); heading.textContent = 'Attachments'; container.append(heading);
+  if (!note.attachments.length) {
+    const empty = document.createElement('p'); empty.className = 'muted'; empty.textContent = 'No files attached to this note yet.';
+    container.append(empty); return;
+  }
+  for (const att of note.attachments) {
+    const row = document.createElement('div'); row.className = 'note-attachment';
+    const title = document.createElement('strong'); title.textContent = att.label || att.name;
+    const desc = document.createElement('p'); desc.className = 'muted attachment-desc'; desc.textContent = att.description || '(no description)';
+    const meta = document.createElement('small'); meta.textContent = `${att.name} · ${formatMiB(att.size)}`;
+    const actions = document.createElement('div'); actions.className = 'attachment-actions';
+    actions.append(
+      button('Download', () => task(() => downloadAttachment(att)), ''),
+      button('Edit', () => openAttachmentEditor(note.id, att.id), ''),
+      button('Delete', () => task(() => deleteAttachment(note.id, att.id)), 'danger')
+    );
+    row.append(title, desc, meta, actions);
+    container.append(row);
+  }
+}
+function openAttachmentEditor(noteId, attachmentId) {
+  const note = currentNoteInIndex(noteId);
+  const att = note?.attachments?.find(a => a.id === attachmentId);
+  if (!att) return;
+  editingAttachment = {noteId, attachmentId};
+  $('attachment-label').value = att.label;
+  $('attachment-description').value = att.description;
+  $('attachment-dialog').showModal();
+  $('attachment-label').focus();
 }
 function editNote(id = null) {
   if (busy) return;
   if (dirty && !confirm('Discard unsaved edits to this note?')) return;
-  const note = session.index.notes.find(n => n.id === id) || {id: crypto.randomUUID(), title: '', body: ''};
+  const note = id ? structuredClone(currentNoteInIndex(id)) : {id: crypto.randomUUID(), title: '', body: '', attachments: []};
+  if (!note) return;
+  if (!note.attachments) note.attachments = [];
+  editingNoteId = note.id;
   $('editor').replaceChildren();
   const heading = document.createElement('h2'); heading.textContent = id ? 'Edit note' : 'New note';
   const title = document.createElement('input'); title.id = 'note-title'; title.placeholder = 'Note title'; title.ariaLabel = 'Note title'; title.value = note.title; title.maxLength = 1000;
   const body = document.createElement('textarea'); body.id = 'note-body'; body.placeholder = 'Write something private…'; body.ariaLabel = 'Note text'; body.value = note.body; body.maxLength = 1000000;
   title.addEventListener('input', () => {dirty = true;}); body.addEventListener('input', () => {dirty = true;});
-  const hint = document.createElement('p'); hint.className = 'muted'; hint.textContent = 'Click Save to keep edits. Locking or idle auto-lock discards unsaved changes.';
-  $('editor').append(heading, title, body, button('Save note', () => task(async () => {
+  const attachWrap = document.createElement('label'); attachWrap.className = 'button'; attachWrap.textContent = 'Attach file';
+  const attachInput = document.createElement('input'); attachInput.type = 'file'; attachInput.id = 'note-attach'; attachInput.multiple = true; attachInput.hidden = true;
+  attachWrap.append(attachInput);
+  attachInput.addEventListener('change', () => {
+    const files = [...attachInput.files]; attachInput.value = '';
+    if (!files.length) return;
+    task(async () => {
+      const s = session; ensure(s);
+      let current = structuredClone(currentNoteInIndex(editingNoteId) || note);
+      if (!current.attachments) current.attachments = [];
+      for (const file of files) {
+        if (file.size > MAX_FILE) throw Error(`${file.name}: exceeds 128 MiB.`);
+        message(`Encrypting ${file.name}…`);
+        const meta = await uploadBytes(s, file.name, await file.arrayBuffer(), file.type);
+        current.attachments.push({id: meta.id, label: file.name, description: '', name: meta.name, type: meta.type, size: meta.size, iv: meta.iv, added: meta.added});
+      }
+      current.title = title.value; current.body = body.value;
+      await persistNote(current);
+      editingNoteId = current.id; dirty = false;
+      render();
+      const list = document.getElementById('note-attachments');
+      if (list) renderAttachments(list, currentNoteInIndex(editingNoteId));
+      message(files.length === 1 ? 'File attached.' : `${files.length} files attached.`);
+    });
+  });
+  const attachments = document.createElement('div'); attachments.id = 'note-attachments';
+  renderAttachments(attachments, structuredClone(currentNoteInIndex(note.id) || note));
+  const hint = document.createElement('p'); hint.className = 'muted'; hint.textContent = 'Save the note text with Save note. Attachments are stored when you attach or edit them. Locking discards unsaved title/body text.';
+  const saveBtn = button('Save note', () => task(async () => {
     const s = session; ensure(s);
-    const index = structuredClone(s.index);
-    const updated = {id: note.id, title: title.value, body: body.value, updated: new Date().toISOString()};
-    const pos = index.notes.findIndex(n => n.id === note.id);
-    if (pos < 0) index.notes.push(updated); else index.notes[pos] = updated;
-    await save(s, index); dirty = false; render(); message('Note saved.');
-  })), hint);
+    const current = structuredClone(currentNoteInIndex(editingNoteId) || note);
+    current.title = title.value; current.body = body.value;
+    await persistNote(current); dirty = false; render(); message('Note saved.');
+  }));
+  $('editor').append(heading, title, body, attachWrap, attachments, saveBtn, hint);
   if (id) $('editor').append(button('Delete note', () => task(async () => {
-    if (!confirm('Permanently delete this note? Existing exported backups are not changed.')) return;
-    const s = session; const index = structuredClone(s.index); index.notes = index.notes.filter(n => n.id !== id);
-    await save(s, index); dirty = false; $('editor').replaceChildren(); render(); message('Note deleted.');
+    if (!confirm('Permanently delete this note and its attachments? Existing exported backups are not changed.')) return;
+    const s = session; ensure(s);
+    const existing = currentNoteInIndex(id);
+    for (const att of existing?.attachments || []) await api(`/api/files/${att.id}`, {method: 'DELETE'}, s).catch(() => {});
+    const index = structuredClone(s.index); index.notes = index.notes.filter(n => n.id !== id);
+    await save(s, index); dirty = false; editingNoteId = null; $('editor').replaceChildren(); render(); message('Note deleted.');
   }), 'danger'));
   dirty = false; title.focus();
 }
@@ -153,41 +246,68 @@ async function uploadBytes(s, name, bytes, type = 'application/octet-stream') {
   await api(`/api/files/${id}`, {method: 'PUT', body: new Blob([box.ciphertext], {type: 'application/octet-stream'})}, s); ensure(s);
   return {id, name, type, size: bytes.byteLength, iv: box.iv, added: new Date().toISOString()};
 }
-$('upload').addEventListener('change', () => {
-  const files = [...$('upload').files]; $('upload').value = '';
-  task(async () => {
-    const s = session;
-    for (const file of files) {
-      if (file.size > MAX_FILE) throw Error(`${file.name}: exceeds 128 MiB. Earlier files, if any, were saved.`);
-      message(`Encrypting ${file.name}…`);
-      const meta = await uploadBytes(s, file.name, await file.arrayBuffer(), file.type);
-      const index = structuredClone(s.index); index.files.push(meta);
-      await save(s, index); render();
-    }
-    message(`${files.length} file(s) encrypted and saved.`);
-  });
-});
 function download(blob, name) {
   const url = URL.createObjectURL(blob); urls.add(url);
   const a = document.createElement('a'); a.href = url; a.download = name; a.click();
   setTimeout(() => {URL.revokeObjectURL(url); urls.delete(url);}, 30000);
 }
-async function downloadFile(file) {
+async function downloadAttachment(att) {
   const s = session; message('Decrypting file…');
-  const bytes = await (await api(`/api/files/${file.id}`, {}, s)).arrayBuffer(); ensure(s);
+  const bytes = await (await api(`/api/files/${att.id}`, {}, s)).arrayBuffer(); ensure(s);
   let plain;
-  try { plain = await decrypt(s.key, bytes, file.iv, fileAAD(s.config.vaultId, file.id)); }
+  try { plain = await decrypt(s.key, bytes, att.iv, fileAAD(s.config.vaultId, att.id)); }
   catch { throw Error('File integrity check failed. Nothing was downloaded.'); }
   ensure(s);
-  download(new Blob([plain], {type: 'application/octet-stream'}), file.name);
+  download(new Blob([plain], {type: 'application/octet-stream'}), att.name);
   message('File downloaded. The downloaded copy is NOT encrypted; protect or remove it yourself.');
 }
-async function deleteFile(file) {
-  if (!confirm(`Permanently delete “${file.name}”? Existing exports are not changed.`)) return;
-  const s = session; const index = structuredClone(s.index); index.files = index.files.filter(f => f.id !== file.id);
-  await save(s, index);
-  await api(`/api/files/${file.id}`, {method: 'DELETE'}, s); ensure(s); render(); message('File deleted.');
+async function deleteAttachment(noteId, attachmentId) {
+  const note = currentNoteInIndex(noteId);
+  const att = note?.attachments?.find(a => a.id === attachmentId);
+  if (!att) return;
+  if (!confirm(`Permanently delete attachment “${att.label || att.name}”?`)) return;
+  const s = session; ensure(s);
+  const current = structuredClone(note);
+  current.attachments = current.attachments.filter(a => a.id !== attachmentId);
+  await persistNote(current);
+  await api(`/api/files/${attachmentId}`, {method: 'DELETE'}, s); ensure(s);
+  render();
+  if (editingNoteId === noteId) {
+    const list = document.getElementById('note-attachments');
+    if (list) renderAttachments(list, currentNoteInIndex(noteId));
+  }
+  message('Attachment deleted.');
 }
+$('attachment-form').addEventListener('submit', event => {
+  event.preventDefault();
+  task(async () => {
+    if (!editingAttachment) return;
+    const {noteId, attachmentId} = editingAttachment;
+    const note = currentNoteInIndex(noteId);
+    const att = note?.attachments?.find(a => a.id === attachmentId);
+    if (!att) return;
+    const label = $('attachment-label').value.trim();
+    if (!label) throw Error('Label cannot be empty.');
+    const current = structuredClone(note);
+    const pos = current.attachments.findIndex(a => a.id === attachmentId);
+    current.attachments[pos] = {...att, label, description: $('attachment-description').value.trim()};
+    await persistNote(current);
+    $('attachment-dialog').close();
+    editingAttachment = null;
+    $('attachment-label').value = ''; $('attachment-description').value = '';
+    render();
+    if (editingNoteId === noteId) {
+      const list = document.getElementById('note-attachments');
+      if (list) renderAttachments(list, currentNoteInIndex(noteId));
+    }
+    message('Attachment details saved.');
+  });
+});
+$('cancel-attachment-edit').onclick = () => {
+  editingAttachment = null;
+  $('attachment-label').value = ''; $('attachment-description').value = '';
+  $('attachment-dialog').close();
+};
 $('export').addEventListener('click', () => task(async () => {
   const s = session;
   let target;
@@ -225,9 +345,10 @@ $('import-form').addEventListener('submit', event => {
     const header = JSON.parse(await file.slice(12,12+length).text());
     const config = header.state;
     const old = await derive(password, config.salt, config.iterations); password = ''; ensure(s);
-    let imported;
-    try { imported = await openIndex(old.key, config); }
+    let opened;
+    try { opened = await openIndex(old.key, config); }
     catch { throw Error('Wrong backup password or corrupted backup. Nothing was imported.'); }
+    const {index: importedIndex} = migrateIndexToV2(opened);
     const positions = new Map(); let offset = 12 + length;
     if (!Array.isArray(header.files)) throw Error('Invalid backup file list.');
     for (const f of header.files) {
@@ -236,24 +357,29 @@ $('import-form').addEventListener('submit', event => {
     }
     if (offset !== file.size) throw Error('Backup is incomplete or has trailing data. Nothing was imported.');
     const index = structuredClone(s.index);
+    let attachmentTotal = 0;
     try {
-      for (const note of imported.notes) {
+      for (const note of importedIndex.notes) {
         if (typeof note.title !== 'string' || typeof note.body !== 'string' || note.title.length > 1000 || note.body.length > 1000000) throw Error('Invalid backup note.');
-        index.notes.push({id: crypto.randomUUID(), title: note.title, body: note.body, updated: new Date().toISOString()});
-      }
-      for (const f of imported.files) {
-        const pos = positions.get(f.id);
-        if (!pos || typeof f.name !== 'string' || f.name.length > 4096 || !Number.isSafeInteger(f.size) || f.size < 0 || pos.size !== f.size + 16) throw Error('Invalid backup attachment.');
-        message(`Importing ${f.name}…`);
-        const cipher = await file.slice(pos.offset, pos.offset + pos.size).arrayBuffer(); ensure(s);
-        const plain = await decrypt(old.key, cipher, f.iv, fileAAD(config.vaultId, f.id)); ensure(s);
-        const meta = await uploadBytes(s, f.name, plain, f.type); index.files.push(meta);
+        const copy = {id: crypto.randomUUID(), title: note.title, body: note.body, updated: new Date().toISOString(), attachments: []};
+        for (const att of note.attachments || []) {
+          const pos = positions.get(att.id);
+          if (!pos || typeof att.name !== 'string' || att.name.length > 4096 || !Number.isSafeInteger(att.size) || att.size < 0 || pos.size !== att.size + 16) throw Error('Invalid backup attachment.');
+          message(`Importing ${att.name}…`);
+          const cipher = await file.slice(pos.offset, pos.offset + pos.size).arrayBuffer(); ensure(s);
+          const plain = await decrypt(old.key, cipher, att.iv, fileAAD(config.vaultId, att.id)); ensure(s);
+          const meta = await uploadBytes(s, att.name, plain, att.type || 'application/octet-stream');
+          copy.attachments.push({
+            id: meta.id, label: att.label || att.name, description: att.description || '', name: att.name,
+            type: att.type || meta.type, size: meta.size, iv: meta.iv, added: new Date().toISOString()
+          });
+          attachmentTotal++;
+        }
+        index.notes.push(copy);
       }
       await save(s, index); render();
-      message(`Imported ${imported.notes.length} note(s) and ${imported.files.length} file(s) as copies.`);
+      message(`Imported ${importedIndex.notes.length} note(s) and ${attachmentTotal} attachment(s) as copies.`);
     } catch (error) {
-      // Never remove uploads after an ambiguous commit: a lost response may hide a successful save.
-      // An interrupted import may leave harmless unreferenced ciphertext, not lost content.
       throw error;
     }
   });
