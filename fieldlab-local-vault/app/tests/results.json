@@ -1,0 +1,21 @@
+{
+  "passed": [
+    "Unauthenticated access, hostile Origin and hostile Host rejected",
+    "First-run password setup and browser WebCrypto in HTTPS",
+    "Create, edit and full-text search notes",
+    "Arbitrary binary attachment encrypt/upload/download/decrypt byte-for-byte",
+    "101 MiB attachment roundtrip (128 MiB limit)",
+    "Lock wipes DOM; wrong password rejected; correct unlock restores content",
+    "AES-GCM roundtrip, wrong-key rejection and tamper rejection",
+    "Stale revision cannot overwrite newer vault",
+    "Oversize encrypted upload rejected without reading its body",
+    "Whole-vault encrypted export contains no test-note plaintext",
+    "Wrong backup password imports nothing",
+    "Export imported into separately keyed fresh vault; notes and attachment preserved",
+    "Note deletion cancel/confirm and attachment deletion",
+    "Idle auto-lock at selected one-minute interval",
+    "Vault survives server restart and correct password decrypts persistent state",
+    "No browser runtime errors",
+    "Server disk contains no plaintext notes, original filenames or master password"
+  ]
+}

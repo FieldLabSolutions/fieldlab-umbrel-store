@@ -1,0 +1,35 @@
+manifestVersion: 1
+id: fieldlab-local-vault
+category: files
+name: Field Lab Vault
+icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-local-vault/icon.png
+version: "1.0.0"
+tagline: Local-only encrypted notes and files with browser-side WebCrypto
+description: >-
+  Personal ciphertext-only vault: AES-256-GCM notes and attachments (up to 128 MiB each),
+  PBKDF2-SHA256 with 600000 rounds, encrypted export/import, and idle lock. Passwords and
+  keys never leave your browser tab in plaintext; the server stores ciphertext only.
+
+  WebCrypto requires HTTPS. Umbrel's app proxy serves a plain-HTTP landing page (no password fields)
+  that links to the vault on LAN port 8449 with a self-signed TLS certificate generated on first run
+  under this app's data folder. Verify the SHA-256 fingerprint on the landing page before trusting
+  the certificate in your browser.
+
+  Umbrel may automatically create a Tor hidden service to the HTTP landing page. That Tor URL is not
+  a secure context for WebCrypto and must not be used to unlock the vault. The encrypted vault UI is
+  intended for direct HTTPS on your home LAN only (no internet exposure, no password recovery).
+developer: Field Lab
+website: ""
+dependencies: []
+repo: ""
+support: ""
+port: 8746
+gallery: []
+path: ""
+defaultUsername: ""
+defaultPassword: ""
+releaseNotes: >-
+  Initial Umbrel Community release. HTTP landing via app proxy; HTTPS vault on LAN port 8449 with
+  per-device certificate under app data.
+submitter: Field Lab
+submission: ""
