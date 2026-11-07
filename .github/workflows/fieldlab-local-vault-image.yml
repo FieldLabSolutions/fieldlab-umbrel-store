@@ -1,0 +1,63 @@
+name: fieldlab-local-vault image
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "fieldlab-local-vault/app/**"
+      - "fieldlab-local-vault/Dockerfile"
+      - "fieldlab-local-vault/entrypoint.sh"
+      - ".github/workflows/fieldlab-local-vault-image.yml"
+    tags: ["fieldlab-local-vault-v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+  packages: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python3 -m pip install --upgrade pip playwright
+      - run: python3 -m playwright install chromium --with-deps
+      - run: cd fieldlab-local-vault/app && python3 tests/e2e.py
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: "${{ github.actor }}"
+          password: "${{ secrets.GITHUB_TOKEN }}"
+      - id: ver
+        run: echo "v=$(tr -d ' \n' < fieldlab-local-vault/app/VERSION)" >> "$GITHUB_OUTPUT"
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: fieldlab-local-vault
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: |
+            ghcr.io/fieldlabsolutions/fieldlab-local-vault:${{ steps.ver.outputs.v }}
+            ghcr.io/fieldlabsolutions/fieldlab-local-vault:latest
+      - name: Pin digest in docker-compose
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VER: ${{ steps.ver.outputs.v }}
+        run: |
+          python3 -c "
+          import pathlib, re, os
+          p = pathlib.Path('fieldlab-local-vault/docker-compose.yml')
+          line = f'image: ghcr.io/fieldlabsolutions/fieldlab-local-vault:{os.environ[\"VER\"]}@{os.environ[\"DIGEST\"]}'
+          p.write_text(re.sub(r'    image: ghcr\\.io/fieldlabsolutions/fieldlab-local-vault:[^\\n]+', f'    {line}', p.read_text(), count=1))
+          "
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        with:
+          commit_message: "chore(fieldlab-local-vault): pin image digest"
+          file_pattern: fieldlab-local-vault/docker-compose.yml
+      - run: |
+          echo "Image: ghcr.io/fieldlabsolutions/fieldlab-local-vault:${{ steps.ver.outputs.v }}@${{ steps.build.outputs.digest }}" | tee -a "$GITHUB_STEP_SUMMARY"
