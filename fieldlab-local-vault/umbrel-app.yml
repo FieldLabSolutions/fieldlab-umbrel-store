@@ -3,7 +3,7 @@ id: fieldlab-local-vault
 category: files
 name: Field Lab Vault
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-local-vault/icon.png
-version: "1.0.1"
+version: "1.0.2"
 tagline: Local-only encrypted notes and files with browser-side WebCrypto
 description: >-
   Personal ciphertext-only vault: AES-256-GCM notes and attachments (up to 128 MiB each),
@@ -29,10 +29,11 @@ path: ""
 defaultUsername: ""
 defaultPassword: ""
 releaseNotes: >-
+  1.0.2: Fixes the landing-page link (HTTP app proxy → HTTPS :8449) blocked by cross-site request
+  guards. Top-level navigation to the vault UI is allowed; API and mutating requests stay protected.
+  Bumped version so Umbrel offers the update (same-version digest-only changes are not surfaced).
   1.0.1: Ships data/ and cert/ in the store so Umbrel creates them as uid 1000 (fixes root-owned
   app-data crash on first install). Entrypoint exits with a clear message if data or cert is not writable.
-  Allows cross-site top-level navigation from the HTTP landing page to the HTTPS vault UI; API calls
-  remain protected.
   1.0.0: Initial release — HTTP landing via app proxy; HTTPS vault on LAN port 8449.
 submitter: Field Lab
 submission: ""
