@@ -30,6 +30,8 @@ MAGIC = b'LVBAK001'
 MAX_FILE = 128 * 1024 * 1024 + 16
 MAX_INDEX = 8 * 1024 * 1024
 ID = re.compile(r'^[0-9a-f-]{36}$')
+# Top-level document navigations from the HTTP landing page (different port) use cross-site fetches.
+NAV_STATIC_PATHS = frozenset({'/', '/index.html', '/app.js', '/crypto.js', '/style.css'})
 
 LANDING_STYLE = """\
 body{font-family:system-ui,sans-serif;max-width:42rem;margin:2rem auto;padding:0 1rem;line-height:1.5;color:#111}
@@ -239,6 +241,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def is_top_level_nav_static(self):
+        if self.command not in ('GET', 'HEAD'):
+            return False
+        if self.headers.get('Sec-Fetch-Mode') != 'navigate':
+            return False
+        path = self.path.split('?', 1)[0].split('#', 1)[0]
+        return path in NAV_STATIC_PATHS
+
     def guard(self):
         if not client_allowed(self.client_address):
             self.reply(403, {'error': 'Home LAN only'})
@@ -253,6 +263,8 @@ class Handler(BaseHTTPRequestHandler):
             if not valid_vault_hostname(name):
                 self.reply(403, {'error': 'Invalid host'})
                 return False
+        if self.is_top_level_nav_static():
+            return True
         origin = self.headers.get('Origin')
         expected = expected_https_origin(self.headers)
         if origin is not None and origin != expected:

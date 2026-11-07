@@ -70,6 +70,16 @@ def main():
             assert request(origin,'/api/setup','POST',b'{}',{'Origin':'https://evil.invalid','Content-Type':'application/json'})[0] == 403
             assert request(origin,'/api/status',headers={'Host':'evil.invalid'})[0] == 403
             ok('Unauthenticated access, hostile Origin and hostile Host rejected')
+            landing_nav = {
+                'Host': '127.0.0.1:18449',
+                'Sec-Fetch-Site': 'cross-site',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Dest': 'document',
+            }
+            status, body = request(origin, '/', headers=landing_nav)
+            assert status == 200 and b'<!doctype html>' in body.lower()
+            assert request(origin, '/api/status', headers=landing_nav)[0] == 403
+            ok('Cross-site landing-page link may open vault UI; API still blocked cross-site')
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
                 context = browser.new_context(ignore_https_errors=True, accept_downloads=True)

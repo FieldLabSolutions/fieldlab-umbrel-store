@@ -1,6 +1,7 @@
 {
   "passed": [
     "Unauthenticated access, hostile Origin and hostile Host rejected",
+    "Cross-site landing-page link may open vault UI; API still blocked cross-site",
     "First-run password setup and browser WebCrypto in HTTPS",
     "Create, edit and full-text search notes",
     "Arbitrary binary attachment encrypt/upload/download/decrypt byte-for-byte",
