@@ -4,7 +4,7 @@ name: Miner Controller 3000
 tagline: Weather-driven heat controller for the home miners (Avalon Qs + BitAxe)
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-miner-controller/icon.png
 category: bitcoin
-version: "1.5.15"
+version: "1.5.16"
 port: 8742
 description: >-
   Private LAN controller for home Avalon Q miners and BitAxes.
@@ -20,6 +20,8 @@ repo: ""
 support: ""
 gallery: []
 releaseNotes: >-
+  1.5.16: Edit on built-in miners now edits in place instead of adding a duplicate card; Add refuses duplicates.
+
   1.5.15: Settings now has a Restart app button, and the same restart control appears after you save a miner or settings change that needs a restart.
 
   1.5.14: Each miner card now has an Edit button to change its IP, name, alias, and room.
