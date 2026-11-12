@@ -9,7 +9,7 @@ services:
 
   web:
     # Public multi-arch image (linux/arm64 + linux/amd64). Pinned by digest.
-    image: ghcr.io/fieldlabsolutions/miner-controller:1.5.14@sha256:383754329edae0b03d98f2bc81f2d158b82c351a7929d3807bff15a1762687b7
+    image: ghcr.io/fieldlabsolutions/miner-controller:1.5.15@sha256:78298991bfe29c52301b59985ec02a19bf1ea99a478fe5ed4679d35655fcc274
     restart: on-failure
     user: "1000:1000"
     init: true
