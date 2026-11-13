@@ -10,6 +10,7 @@ import ssl
 import subprocess
 import tempfile
 import time
+import http.client
 import urllib.request
 import urllib.error
 from playwright.sync_api import sync_playwright, expect
@@ -127,10 +128,18 @@ def main():
                 req = urllib.request.Request(landing_http + icon_path)
                 with urllib.request.urlopen(req, timeout=10) as r:
                     assert r.status == 200, icon_path
-            with urllib.request.urlopen(urllib.request.Request(landing_http + '/'), timeout=10) as r:
-                landing_body = r.read()
-            assert b'apple-touch-icon' in landing_body and b'favicon.ico' in landing_body
-            ok('Favicon and apple-touch icon served on HTTPS vault and HTTP landing')
+            conn = http.client.HTTPConnection('127.0.0.1', landing_http_port, timeout=10)
+            conn.request('GET', '/')
+            redirect = conn.getresponse()
+            conn.close()
+            assert redirect.status == 302, redirect.status
+            assert f':{land_env["VAULT_PORT"]}' in (redirect.getheader('Location') or '')
+            ca_req = urllib.request.Request(landing_http + '/ca')
+            with urllib.request.urlopen(ca_req, timeout=10) as r:
+                ca_body = r.read()
+            assert b'Install the vault CA' in ca_body
+            assert b'Windows' in ca_body and b'Android' in ca_body
+            ok('HTTP landing redirects to HTTPS vault; CA install page on /ca')
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
                 context = browser.new_context(ignore_https_errors=True, accept_downloads=True)

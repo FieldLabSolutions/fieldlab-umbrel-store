@@ -8,7 +8,7 @@ services:
 
   web:
     # Public multi-arch image (linux/amd64 + linux/arm64). Pinned by digest after CI build.
-    image: ghcr.io/fieldlabsolutions/fieldlab-local-vault:1.0.4@sha256:8a8eb172e3a2fd8fc182b3815f23ecdcbedddc173320fd0b167c6c49491e379e
+    image: ghcr.io/fieldlabsolutions/fieldlab-local-vault:1.0.5
     restart: on-failure
     user: "1000:1000"
     init: true
@@ -22,8 +22,8 @@ services:
       VAULT_DATA: /data
       VAULT_CERT: /cert/tls.crt
       VAULT_KEY: /cert/tls.key
-      # Optional: append to the generated cert SAN, e.g. "IP:192.168.1.50"
-      VAULT_CERT_SAN_EXTRA: "${APP_LOCAL_VAULT_CERT_SAN_EXTRA:-}"
+      # Comma-separated LAN IPs for the vault HTTPS certificate (defaults include detected LAN IP and 192.168.4.99)
+      VAULT_CERT_IPS: "${APP_LOCAL_VAULT_CERT_IPS:-}"
     volumes:
       - ${APP_DATA_DIR}/data:/data
       - ${APP_DATA_DIR}/cert:/cert

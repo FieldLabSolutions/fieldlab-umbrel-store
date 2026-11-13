@@ -3,17 +3,17 @@ id: fieldlab-local-vault
 category: files
 name: Field Lab Vault
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-local-vault/icon.png
-version: "1.0.4"
+version: "1.0.5"
 tagline: Local-only encrypted notes and files with browser-side WebCrypto
 description: >-
   Personal ciphertext-only vault: AES-256-GCM notes and attachments (up to 128 MiB each),
   PBKDF2-SHA256 with 600000 rounds, encrypted export/import, and idle lock. Passwords and
   keys never leave your browser tab in plaintext; the server stores ciphertext only.
 
-  WebCrypto requires HTTPS. Umbrel's app proxy serves a plain-HTTP landing page (no password fields)
-  that links to the vault on LAN port 8449 with a self-signed TLS certificate generated on first run
-  under this app's data folder. Verify the SHA-256 fingerprint on the landing page before trusting
-  the certificate in your browser.
+  WebCrypto requires HTTPS. On first run the app creates a small local CA (stored under cert/) and
+  issues the LAN server certificate for your Umbrel IP, umbrel.local, and localhost. Import the CA
+  once per device from /ca (or the HTTP landing /ca page) so the browser opens the vault without
+  warnings. The Umbrel tile HTTP landing redirects straight to https://<host>:8449/.
 
   Umbrel may automatically create a Tor hidden service to the HTTP landing page. That Tor URL is not
   a secure context for WebCrypto and must not be used to unlock the vault. The encrypted vault UI is
@@ -29,6 +29,10 @@ path: ""
 defaultUsername: ""
 defaultPassword: ""
 releaseNotes: >-
+  1.0.5: Local CA and CA-signed HTTPS cert (SANs include your LAN IP, umbrel.local, localhost).
+  HTTP landing redirects to the vault login; /ca documents installing the CA on Windows (Trusted Root)
+  and Android (Settings > Security > Encryption & credentials > Install a certificate > CA certificate).
+  Set APP_LOCAL_VAULT_CERT_IPS for extra LAN IPs. Existing vault data is unchanged.
   1.0.4: Add a wallet backup type with BIP39 English word entry (12/24 plus 15/18/21), bundled
   wordlist, 4-letter auto-fill, checksum validation, optional BIP39 passphrase, hidden-by-default
   words, and file attachments. Search matches wallet name/notes only, never seed words. Browser

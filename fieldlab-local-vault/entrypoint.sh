@@ -26,19 +26,12 @@ require_writable() {
 require_writable "$DATA_DIR" "data"
 require_writable "$CERT_DIR" "cert"
 umask 077
-if [ ! -s "$CERT_FILE" ]; then
-  SAN="IP:127.0.0.1,DNS:localhost,DNS:umbrel.local"
-  if [ -n "${VAULT_CERT_SAN_EXTRA:-}" ]; then
-    SAN="${SAN},${VAULT_CERT_SAN_EXTRA}"
-  fi
-  if ! openssl req -x509 -newkey rsa:3072 -sha256 -nodes \
-    -keyout "$KEY_FILE" \
-    -out "$CERT_FILE" \
-    -days 825 -subj '/CN=Field Lab Vault' \
-    -addext "subjectAltName=${SAN}" >/dev/null 2>&1; then
-    echo "fieldlab-local-vault: failed to write TLS certificate under ${CERT_DIR} (check ownership and free space)." >&2
-    exit 1
-  fi
-  chmod 600 "$KEY_FILE"
+if ! python3 -B /app/cert_setup.py; then
+  echo "fieldlab-local-vault: failed to provision TLS under ${CERT_DIR} (check ownership and free space)." >&2
+  exit 1
+fi
+if [ ! -s "$CERT_FILE" ] || [ ! -s "$KEY_FILE" ]; then
+  echo "fieldlab-local-vault: TLS certificate or key missing under ${CERT_DIR}." >&2
+  exit 1
 fi
 exec python3 -B /app/server.py

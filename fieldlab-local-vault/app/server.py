@@ -24,6 +24,8 @@ HTTPS_PORT = int(os.environ.get('VAULT_HTTPS_PORT', os.environ.get('VAULT_PORT',
 HTTPS_BIND = os.environ.get('VAULT_BIND', '0.0.0.0')
 CERT_PATH = Path(os.environ.get('VAULT_CERT', '/cert/tls.crt'))
 KEY_PATH = Path(os.environ.get('VAULT_KEY', '/cert/tls.key'))
+CA_PATH = CERT_PATH.parent / 'ca.crt'
+APP_VERSION = (ROOT / 'VERSION').read_text(encoding='utf-8').strip() if (ROOT / 'VERSION').is_file() else 'dev'
 CONFIGURED_ORIGIN = os.environ.get('VAULT_ORIGIN', '').strip()
 LOCK = threading.RLock()
 MAGIC = b'LVBAK001'
@@ -33,7 +35,7 @@ ID = re.compile(r'^[0-9a-f-]{36}$')
 # Top-level document navigations from the HTTP landing page (different port) use cross-site fetches.
 NAV_STATIC_PATHS = frozenset({
     '/', '/index.html', '/app.js', '/crypto.js', '/style.css',
-    '/favicon.ico', '/favicon-32x32.png', '/apple-touch-icon.png',
+    '/favicon.ico', '/favicon-32x32.png', '/apple-touch-icon.png', '/ca',
 })
 FAVICON_LINKS = (
     '<link rel="icon" href="/favicon.ico" sizes="any">'
@@ -167,18 +169,57 @@ def expected_https_host(headers):
     return f'{host}:{HTTPS_PORT}'
 
 
-def cert_sha256_fingerprint():
-    if not CERT_PATH.is_file():
+def cert_sha256_fingerprint(cert_path: Path | None = None):
+    path = cert_path or CERT_PATH
+    if not path.is_file():
         return '(certificate not generated yet)'
     try:
         out = subprocess.check_output(
-            ['openssl', 'x509', '-in', str(CERT_PATH), '-noout', '-fingerprint', '-sha256'],
+            ['openssl', 'x509', '-in', str(path), '-noout', '-fingerprint', '-sha256'],
             stderr=subprocess.DEVNULL,
             text=True,
         ).strip()
         return out.split('=', 1)[-1].strip() if '=' in out else out
     except (subprocess.CalledProcessError, FileNotFoundError):
         return '(fingerprint unavailable)'
+
+
+def ca_install_page(https_base: str) -> str:
+    ca_fp = cert_sha256_fingerprint(CA_PATH)
+    download = f'{https_base.rstrip("/")}/ca.crt'
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Install Field Lab Vault CA</title>{FAVICON_LINKS}<style>{LANDING_STYLE}</style></head>
+<body><h1>Install the vault CA certificate</h1>
+<p class="muted">Import this one-time CA on each phone or PC you use to open the vault. After that, browsers trust the vault&apos;s HTTPS site on your LAN without warnings.</p>
+<p><a class="button" href="/ca.crt">Download CA certificate (.crt)</a></p>
+<p>Direct link: <code>{download}</code></p>
+<h2>CA SHA-256 fingerprint</h2>
+<pre>{ca_fp}</pre>
+<p class="muted">Confirm this fingerprint matches after download if your OS shows one.</p>
+<h2>Windows</h2>
+<ol>
+<li>Double-click the downloaded <code>.crt</code> file (or install via <strong>certmgr.msc</strong>).</li>
+<li>Choose <strong>Local Machine</strong> or <strong>Current User</strong> as prompted.</li>
+<li>Select <strong>Place all certificates in the following store</strong> → <strong>Browse</strong> → <strong>Trusted Root Certification Authorities</strong> → OK.</li>
+<li>Finish the wizard and confirm the fingerprint if Windows asks.</li>
+</ol>
+<h2>Android</h2>
+<ol>
+<li>Copy the <code>.crt</code> to the device (download link above while on Wi‑Fi, or USB / Files).</li>
+<li><strong>Settings</strong> → <strong>Security</strong> → <strong>Encryption &amp; credentials</strong> (names vary slightly by vendor).</li>
+<li><strong>Install a certificate</strong> → <strong>CA certificate</strong> → pick the file.</li>
+<li>Confirm the install; Android may warn that network traffic can be inspected — this CA is limited to your vault LAN names only.</li>
+</ol>
+<p><a href="{https_base}">Back to vault login</a></p>
+<footer>Field Lab Vault {APP_VERSION} · CA is generated on your Umbrel and never leaves this device except when you download it.</footer>
+</body></html>"""
+
+
+def redirect_to_vault(headers, https_port: int) -> str:
+    forwarded = headers.get('X-Forwarded-Host') or headers.get('Host', 'localhost')
+    hostname, _ = host_header_parts(forwarded)
+    return f'https://{hostname}:{https_port}/'
 
 
 class LandingHandler(BaseHTTPRequestHandler):
@@ -201,38 +242,50 @@ class LandingHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(raw)
             return
+        if path == '/ca.crt':
+            if not CA_PATH.is_file():
+                self.send_error(404)
+                return
+            raw = CA_PATH.read_bytes()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/x-x509-ca-cert')
+            self.send_header('Content-Length', str(len(raw)))
+            self.send_header('Content-Disposition', 'attachment; filename="fieldlab-vault-ca.crt"')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            self.wfile.write(raw)
+            return
+        if path == '/ca':
+            vault_url = redirect_to_vault(self.headers, HTTPS_PORT)
+            raw = ca_install_page(vault_url).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(raw)))
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Referrer-Policy', 'no-referrer')
+            self.send_header('X-Frame-Options', 'DENY')
+            self.send_header(
+                'Content-Security-Policy',
+                "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            )
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            self.wfile.write(raw)
+            return
         if path not in ('/', '/index.html'):
             self.send_error(404)
             return
-        forwarded = self.headers.get('X-Forwarded-Host') or self.headers.get('Host', 'localhost')
-        hostname, _ = host_header_parts(forwarded)
-        vault_url = f'https://{hostname}:{HTTPS_PORT}/'
-        fingerprint = cert_sha256_fingerprint()
-        body = f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Field Lab Vault</title>{FAVICON_LINKS}<style>{LANDING_STYLE}</style></head>
-<body><h1>Field Lab Vault</h1>
-<p class="muted">This page is only a pointer. Passwords and secrets are never entered over plain HTTP.</p>
-<p>WebCrypto requires a <strong>secure context</strong> (HTTPS). Open the vault on your home LAN using the link below, verify the certificate fingerprint, then create or unlock your vault there.</p>
-<p><a class="button" href="{vault_url}">Open vault on HTTPS port {HTTPS_PORT}</a></p>
-<p>Direct URL: <code>{vault_url}</code></p>
-<h2>TLS certificate SHA-256 fingerprint</h2>
-<pre>{fingerprint}</pre>
-<p class="muted">Compare this fingerprint when your browser warns about the self-signed certificate. The certificate and key are generated on first run and stored only under this app&apos;s data directory on your Umbrel.</p>
-<footer>Field Lab Vault · Umbrel opens an optional Tor hidden service to this HTTP landing page only, not to the HTTPS vault port on your LAN.</footer>
-</body></html>"""
-        raw = body.encode('utf-8')
-        self.send_response(200)
-        self.send_header('Content-Type', 'text/html; charset=utf-8')
-        self.send_header('Content-Length', str(len(raw)))
+        vault_url = redirect_to_vault(self.headers, HTTPS_PORT)
+        self.send_response(302)
+        self.send_header('Location', vault_url)
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Referrer-Policy', 'no-referrer')
-        self.send_header('X-Frame-Options', 'DENY')
-        self.send_header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
         self.send_header('Connection', 'close')
         self.end_headers()
-        self.wfile.write(raw)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -376,6 +429,33 @@ class Handler(BaseHTTPRequestHandler):
                         self.end_headers()
                         while chunk := archive.read(1024 * 1024):
                             self.wfile.write(chunk)
+                return
+            if self.path == '/ca.crt':
+                if not CA_PATH.is_file():
+                    return self.reply(404, {'error': 'CA not found'})
+                raw = CA_PATH.read_bytes()
+                self.headers_base(200, 'application/x-x509-ca-cert', len(raw))
+                self.send_header('Content-Disposition', 'attachment; filename="fieldlab-vault-ca.crt"')
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            if self.path == '/ca':
+                vault_url = expected_https_origin(self.headers) + '/'
+                raw = ca_install_page(vault_url).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(raw)))
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('X-Content-Type-Options', 'nosniff')
+                self.send_header('Referrer-Policy', 'no-referrer')
+                self.send_header('X-Frame-Options', 'DENY')
+                self.send_header(
+                    'Content-Security-Policy',
+                    "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+                )
+                self.send_header('Connection', 'close')
+                self.end_headers()
+                self.wfile.write(raw)
                 return
             static = {
                 '/': ('index.html', 'text/html; charset=utf-8'),
