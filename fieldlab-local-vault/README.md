@@ -5,12 +5,11 @@ Local-only encrypted notes and file attachments. Browser-side AES-256-GCM; the P
 ## Umbrel install flow
 
 1. Install from the Field Lab community app store.
-2. Open the app in Umbrel to view the **HTTP landing page** (no passwords).
-3. Follow the link to `https://<your-umbrel-lan-host>:8449/`.
-4. Compare the certificate SHA-256 fingerprint on the landing page with your browser warning, then proceed.
-5. Create a long master passphrase (minimum 16 characters). There is no password recovery.
+2. Open the app in Umbrel — the HTTP landing redirects to `https://<your-umbrel-lan-host>:8449/` (master password screen).
+3. On each device, open `/ca` (from the login link or `http://<host>/ca` before redirect) and install the **vault CA** so the browser trusts HTTPS on your LAN.
+4. Create a long master passphrase (minimum 16 characters). There is no password recovery.
 
-Optional: set `APP_LOCAL_VAULT_CERT_SAN_EXTRA` in `exports.sh` (via app data / Umbrel env) to add your LAN IP to the generated certificate, e.g. `IP:192.168.1.50`.
+Optional: set `APP_LOCAL_VAULT_CERT_IPS` (comma-separated) to add LAN addresses to the server certificate, e.g. `192.168.1.50,192.168.4.99`. When unset, the app adds detected private IPs and `192.168.4.99`.
 
 ## Data layout
 
@@ -18,7 +17,8 @@ Optional: set `APP_LOCAL_VAULT_CERT_SAN_EXTRA` in `exports.sh` (via app data / U
 |---|---|
 | `data/state.json` | Encrypted vault index (ciphertext only) |
 | `data/files/` | Encrypted attachment blobs |
-| `cert/tls.crt`, `cert/tls.key` | Self-signed HTTPS cert (generated on first run) |
+| `cert/ca.crt`, `cert/ca.key` | Local CA (generated once; name-constrained to `.local` and `192.168.4.0/24`) |
+| `cert/tls.crt`, `cert/tls.key` | CA-signed HTTPS server certificate (auto-renewed before expiry) |
 
 ## Tor
 
@@ -28,6 +28,7 @@ Umbrel may expose the HTTP landing page through a Tor hidden service. Do **not**
 
 ```sh
 python3 -m playwright install chromium
+python3 fieldlab-local-vault/app/tests/test_cert_setup.py
 python3 fieldlab-local-vault/app/tests/e2e.py
 ```
 
