@@ -251,6 +251,20 @@ def main():
                 }''')
                 assert integrity
                 ok('AES-GCM roundtrip, wrong-key rejection and tamper rejection')
+                media_chunk = page.evaluate('''async () => {
+                  const m = await import('/media-crypto.js');
+                  const key = await crypto.subtle.generateKey({name:'AES-GCM',length:256}, true, ['encrypt','decrypt']);
+                  const vaultId = crypto.randomUUID();
+                  const itemId = crypto.randomUUID();
+                  const bytes = new TextEncoder().encode('chunk-bytes');
+                  const box = await m.encryptChunk(key, bytes, vaultId, itemId, 0, true);
+                  let tamper = false;
+                  try { await m.decryptChunk(key, box.ciphertext, box.iv, vaultId, itemId, 0, false); } catch { tamper = true; }
+                  const plain = await m.decryptChunk(key, box.ciphertext, box.iv, vaultId, itemId, 0, true);
+                  return tamper && new TextDecoder().decode(plain) === 'chunk-bytes';
+                }''')
+                assert media_chunk
+                ok('Media chunk AAD rejects final-flag tamper')
                 # Optimistic concurrency checked using same derived test credential, never logged.
                 concurrency = page.evaluate('''async password => {
                   const c=await import('/crypto.js');const cfg=await (await fetch('/api/status')).json();
@@ -266,6 +280,10 @@ def main():
                 assert request(origin,'/api/files/11111111-1111-4111-8111-111111111111','PUT',b'',{'Authorization':'Bearer '+token,'Content-Length':str(128*1024*1024+17)})[0] == 413
                 assert request(origin,'/api/setup','POST',b'{}',{'Content-Type':'application/json'})[0] == 400
                 ok('Oversize encrypted upload rejected without reading its body')
+                assert request(origin,'/api/media/status',headers={'Authorization':'Bearer '+token})[0] == 200
+                assert request(origin,'/api/media/vault',headers={'Authorization':'Bearer '+token})[0] in (401, 404)
+                assert request(origin,'/api/media/vault',headers={'Authorization':'Bearer '+token,'X-Media-Authorization':'Bearer wrong-media-token'})[0] in (401, 404)
+                ok('Media API requires main session and media token')
                 with page.expect_download(timeout=90000) as info:
                     page.locator('#export').click()
                 backup = tmp/'backup.lvbak'; info.value.save_as(backup)

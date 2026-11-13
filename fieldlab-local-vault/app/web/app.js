@@ -1,5 +1,6 @@
-import {ITERATIONS, MAX_FILE, b64, unb64, random, derive, authHash, encrypt, decrypt, sealIndex, openIndex, migrateIndexToCurrent, fileAAD} from './crypto.js';
+import {ITERATIONS, MAX_FILE, b64, unb64, random, derive, authHash, encrypt, decrypt, sealIndex, openIndex, migrateIndexToCurrent, fileAAD, utf8} from './crypto.js';
 import {BIP39_WORD_COUNTS, isBip39Word, uniqueWordForPrefix, suggestions, validateBip39Checksum} from './bip39.js';
+import {wireMedia, lockMedia, onVaultLockMedia, checkMediaIdle, mediaIdleMinutes, touchMediaFromVault, mediaIsUnlocked} from './media.js';
 const $ = id => document.getElementById(id);
 let setup = false, session = null, busy = false, pendingImport = null, generation = 0;
 let lastActivity = Date.now(), dirty = false;
@@ -47,6 +48,7 @@ function clearPlaintext() {
 function lock() {
   const unsaved = dirty;
   generation++;
+  onVaultLockMedia();
   session?.abort.abort(); session = null;
   clearPlaintext();
   $('workspace').hidden = true; $('lock').hidden = true; $('gate').hidden = false;
@@ -89,7 +91,9 @@ $('unlock-form').addEventListener('submit', event => {
     $('password').value = ''; $('confirm-password').value = '';
     const config = setup ? {version: 1, vaultId: crypto.randomUUID(), salt: b64(random(32)), iterations: ITERATIONS} : await (await api('/api/status', {}, null)).json();
     message('Deriving encryption key…');
-    const derived = await derive(password, config.salt, config.iterations); password = '';
+    const derived = await derive(password, config.salt, config.iterations);
+    const masterDigest = b64(await crypto.subtle.digest('SHA-256', utf8.encode(password)));
+    password = '';
     if (generation !== stamp) return;
     const s = {...derived, config, abort: new AbortController(), index: null, revision: 0};
     let index;
@@ -116,8 +120,10 @@ $('unlock-form').addEventListener('submit', event => {
       }
     }
     if (generation !== stamp) {s.abort.abort(); return;}
+    s.masterDigest = masterDigest;
     s.index = index; session = s; dirty = false; lastActivity = Date.now();
     $('gate').hidden = true; $('workspace').hidden = false; $('lock').hidden = false;
+    wireMedia(s, message, fn => task(fn), s.masterDigest);
     render();
     if (!setup) message('Unlocked. Auto-lock is on. Export an encrypted backup after changes.');
   });
@@ -219,6 +225,7 @@ function openAttachmentEditor(kind, parentId, attachmentId) {
 }
 function editNote(id = null) {
   if (busy) return;
+  lockMedia();
   if (dirty && !confirm('Discard unsaved edits to this note?')) return;
   editingWalletId = null;
   const note = id ? structuredClone(currentNoteInIndex(id)) : {id: crypto.randomUUID(), title: '', body: '', attachments: []};
@@ -497,6 +504,7 @@ function wireWalletWordInput(input, inputs, onChange) {
 }
 function editWallet(id = null) {
   if (busy) return;
+  lockMedia();
   if (dirty && !confirm('Discard unsaved edits to this wallet?')) return;
   editingNoteId = null;
   const wallet = id ? structuredClone(currentWalletInIndex(id)) : {
@@ -611,8 +619,12 @@ for (const event of ['pointerdown','keydown','input','touchstart','wheel']) wind
   const limit = Number($('idle').value) * 60000;
   if (session && Date.now() - lastActivity >= limit) lock();
   lastActivity = Date.now();
+  if (mediaIsUnlocked()) touchMediaFromVault();
 }, {passive: true, capture: true});
-setInterval(() => {if (session && Date.now() - lastActivity >= Number($('idle').value) * 60000) lock();}, 1000);
+setInterval(() => {
+  if (session && Date.now() - lastActivity >= Number($('idle').value) * 60000) lock();
+  if (session && mediaIsUnlocked()) checkMediaIdle(session, mediaIdleMinutes());
+}, 1000);
 window.addEventListener('pagehide', lock);
 window.addEventListener('beforeunload', event => {if (dirty) {event.preventDefault(); event.returnValue = '';}});
 document.addEventListener('visibilitychange', () => {if (session && Date.now() - lastActivity >= Number($('idle').value) * 60000) lock();});
