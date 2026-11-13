@@ -2,6 +2,7 @@ FROM python:3.13-alpine
 WORKDIR /app
 RUN apk add --no-cache openssl
 COPY app/server.py /app/server.py
+COPY app/media_api.py /app/media_api.py
 COPY app/cert_setup.py /app/cert_setup.py
 COPY app/web /app/web
 COPY entrypoint.sh /entrypoint.sh

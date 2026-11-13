@@ -18,6 +18,7 @@ from playwright.sync_api import sync_playwright, expect
 ROOT = Path(__file__).resolve().parents[1]  # fieldlab-local-vault/app
 BIP39_WORDLIST_SHA256 = '2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda'
 PASSWORD = 'synthetic test passphrase only 2026'
+MEDIA_PASSWORD = 'separate media vault password 2026'
 WALLET_LABEL = 'Synthetic test wallet only 7c2a'
 MARKER = 'synthetic-note-content-934af16b'
 passed = []
@@ -32,6 +33,15 @@ def request(origin, path, method='GET', body=None, headers=None):
             return r.status, r.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()
+
+def e2e_server_env(extra):
+    """Hermetic media limits for CI/VMs (production defaults stay in server.py)."""
+    return {
+        **extra,
+        'VAULT_MEDIA_MIN_DISK_FREE_BYTES': '0',
+        'VAULT_MEDIA_QUOTA_BYTES': str(512 * 1024 * 1024),
+    }
+
 
 def wait_ready(origin, proc):
     for _ in range(100):
@@ -81,7 +91,7 @@ def main():
         try:
             for port in (18449,18450):
                 origin = f'https://127.0.0.1:{port}'
-                env = {**os.environ, 'VAULT_DATA':str(tmp/f'data{port}'), 'VAULT_ORIGIN':origin, 'VAULT_BIND':'127.0.0.1', 'VAULT_PORT':str(port), 'VAULT_CERT':str(tmp/'test.crt'), 'VAULT_KEY':str(tmp/'test.key')}
+                env = e2e_server_env({**os.environ, 'VAULT_DATA':str(tmp/f'data{port}'), 'VAULT_ORIGIN':origin, 'VAULT_BIND':'127.0.0.1', 'VAULT_PORT':str(port), 'VAULT_CERT':str(tmp/'test.crt'), 'VAULT_KEY':str(tmp/'test.key')})
                 p = subprocess.Popen(['python3',str(ROOT/'server.py')], env=env, stdout=subprocess.DEVNULL)
                 procs.append(p); wait_ready(origin,p)
             origin = 'https://127.0.0.1:18449'
@@ -110,7 +120,7 @@ def main():
             assert b'apple-touch-icon' in body and b'favicon.ico' in body
             landing_http_port = 18080
             land_origin = 'https://127.0.0.1:18500'
-            land_env = {
+            land_env = e2e_server_env({
                 **os.environ,
                 'VAULT_DATA': str(tmp / 'dataLanding'),
                 'VAULT_BIND': '127.0.0.1',
@@ -118,7 +128,7 @@ def main():
                 'VAULT_HTTP_PORT': str(landing_http_port),
                 'VAULT_CERT': str(tmp / 'test.crt'),
                 'VAULT_KEY': str(tmp / 'test.key'),
-            }
+            })
             land_env.pop('VAULT_ORIGIN', None)
             land_proc = subprocess.Popen(['python3', str(ROOT / 'server.py')], env=land_env, stdout=subprocess.DEVNULL)
             procs.append(land_proc)
@@ -251,6 +261,20 @@ def main():
                 }''')
                 assert integrity
                 ok('AES-GCM roundtrip, wrong-key rejection and tamper rejection')
+                media_chunk = page.evaluate('''async () => {
+                  const m = await import('/media-crypto.js');
+                  const key = await crypto.subtle.generateKey({name:'AES-GCM',length:256}, true, ['encrypt','decrypt']);
+                  const vaultId = crypto.randomUUID();
+                  const itemId = crypto.randomUUID();
+                  const bytes = new TextEncoder().encode('chunk-bytes');
+                  const box = await m.encryptChunk(key, bytes, vaultId, itemId, 0, true);
+                  let tamper = false;
+                  try { await m.decryptChunk(key, box.ciphertext, box.iv, vaultId, itemId, 0, false); } catch { tamper = true; }
+                  const plain = await m.decryptChunk(key, box.ciphertext, box.iv, vaultId, itemId, 0, true);
+                  return tamper && new TextDecoder().decode(plain) === 'chunk-bytes';
+                }''')
+                assert media_chunk
+                ok('Media chunk AAD rejects final-flag tamper')
                 # Optimistic concurrency checked using same derived test credential, never logged.
                 concurrency = page.evaluate('''async password => {
                   const c=await import('/crypto.js');const cfg=await (await fetch('/api/status')).json();
@@ -266,6 +290,89 @@ def main():
                 assert request(origin,'/api/files/11111111-1111-4111-8111-111111111111','PUT',b'',{'Authorization':'Bearer '+token,'Content-Length':str(128*1024*1024+17)})[0] == 413
                 assert request(origin,'/api/setup','POST',b'{}',{'Content-Type':'application/json'})[0] == 400
                 ok('Oversize encrypted upload rejected without reading its body')
+                assert request(origin,'/api/media/status',headers={'Authorization':'Bearer '+token})[0] == 200
+                assert request(origin,'/api/media/vault',headers={'Authorization':'Bearer '+token})[0] in (401, 404)
+                assert request(origin,'/api/media/vault',headers={'Authorization':'Bearer '+token,'X-Media-Authorization':'Bearer wrong-media-token'})[0] in (401, 404)
+                ok('Media API requires main session and media token')
+                media_roundtrip = page.evaluate('''async ([masterPw, mediaPw]) => {
+                  const c = await import('/crypto.js');
+                  const mc = await import('/media-crypto.js');
+                  const st = await (await fetch('/api/status')).json();
+                  const main = await c.derive(masterPw, st.salt);
+                  const hdr = mt => ({Authorization: `Bearer ${main.token}`, ...(mt ? {'X-Media-Authorization': `Bearer ${mt}`} : {})});
+                  let ms = await (await fetch('/api/media/status', {headers: hdr()})).json();
+                  const salt = ms.initialized ? ms.salt : c.b64(c.random(32));
+                  const derived = await mc.deriveMedia(mediaPw, salt);
+                  if (!ms.initialized) {
+                    const mediaKey0 = await mc.generateMediaKey();
+                    const wrap = await mc.wrapMediaKey(derived.key, mediaKey0, st.vaultId);
+                    const index0 = {version: 1, items: []};
+                    const sealed0 = await mc.sealMediaIndex(mediaKey0, index0, st.vaultId);
+                    const setupBody = {version: 1, vaultId: st.vaultId, salt, iterations: 600000,
+                      wrapIv: wrap.wrapIv, wrappedKey: wrap.wrappedKey, revision: 1,
+                      indexIv: sealed0.indexIv, indexCiphertext: sealed0.indexCiphertext, usedBytes: 0,
+                      authHash: await c.authHash(derived.token)};
+                    const r = await fetch('/api/media/setup', {method:'POST', headers:{...hdr(), 'Content-Type':'application/json'}, body: JSON.stringify(setupBody)});
+                    if (!r.ok) throw new Error('media setup ' + r.status);
+                  }
+                  const v1 = await fetch('/api/media/vault', {headers: hdr(derived.token)});
+                  const v2 = await fetch('/api/media/vault', {headers: hdr(derived.token)});
+                  if (!v1.ok || !v2.ok) throw new Error('media vault unlock failed');
+                  let envelope = await v1.json();
+                  mediaKey = await mc.unwrapMediaKey(derived.key, envelope.wrapIv, envelope.wrappedKey, envelope.vaultId);
+                  let index = await mc.openMediaIndex(mediaKey, envelope);
+                  const itemId = crypto.randomUUID();
+                  const itemKey = await crypto.subtle.generateKey({name:'AES-GCM',length:256}, true, ['encrypt','decrypt']);
+                  const wrapped = await mc.wrapItemKey(mediaKey, itemKey, st.vaultId, itemId);
+                  const plain = new TextEncoder().encode('synthetic-lvmedia-roundtrip');
+                  const box = await mc.encryptChunk(itemKey, plain, st.vaultId, itemId, 0, true);
+                  const bytes = new Uint8Array(box.ciphertext);
+                  let up = await fetch(`/api/media/items/${itemId}/chunks/0`, {method:'PUT', headers:{...hdr(derived.token), 'Content-Length': String(bytes.length)}, body: bytes});
+                  if (!up.ok) throw new Error('chunk put');
+                  const meta = {filename:'roundtrip.bin', type:'application/octet-stream', size: plain.length, date: new Date().toISOString()};
+                  const mbox = await mc.encryptMeta(itemKey, meta, st.vaultId, itemId);
+                  let commit = await fetch(`/api/media/items/${itemId}/commit`, {method:'POST', headers:{...hdr(derived.token), 'Content-Type':'application/json'}, body: JSON.stringify({chunkCount:1, plaintextSize: plain.length})});
+                  if (!commit.ok) throw new Error('commit');
+                  index.items.push({id:itemId, chunkCount:1, plaintextSize: plain.length, wrappedKey: wrapped, metaIv: mbox.metaIv, metaCiphertext: mbox.metaCiphertext, chunks:[{index:0, iv: box.iv}]});
+                  const sealed = await mc.sealMediaIndex(mediaKey, index, st.vaultId);
+                  const putBody = {...envelope, indexIv: sealed.indexIv, indexCiphertext: sealed.indexCiphertext, revision: envelope.revision + 1};
+                  let pu = await fetch('/api/media/vault', {method:'PUT', headers:{...hdr(derived.token), 'Content-Type':'application/json'}, body: JSON.stringify(putBody)});
+                  if (!pu.ok) throw new Error('index put');
+                  const prep = await (await fetch('/api/media/export', {method:'POST', headers:{...hdr(derived.token), 'Content-Type':'application/json'}, body:'{}'})).json();
+                  const arc = await (await fetch(prep.url, {headers: hdr(derived.token)})).arrayBuffer();
+                  const view = new Uint8Array(arc);
+                  if (new TextDecoder().decode(view.slice(0,9)) !== 'LVMEDIA01') throw new Error('bad magic');
+                  const metaLen = new DataView(arc).getUint32(9);
+                  const header = JSON.parse(new TextDecoder().decode(view.slice(13, 13 + metaLen)));
+                  const remote = header.state;
+                  const impDerived = await mc.deriveMedia(mediaPw, remote.salt);
+                  const exKey = await mc.unwrapMediaKey(impDerived.key, remote.wrapIv, remote.wrappedKey, remote.vaultId);
+                  const impIndex = await mc.openMediaIndex(exKey, remote);
+                  let off = 13 + metaLen;
+                  const map = new Map();
+                  for (const f of header.files) {
+                    const k = f.kind === 'thumb' ? `${f.itemId}:thumb` : `${f.itemId}:${f.chunk}`;
+                    map.set(k, {f, off}); off += f.size;
+                  }
+                  if (off !== view.length) throw new Error('truncated');
+                  const old = impIndex.items[0];
+                  const oldId = old.id;
+                  const newId = crypto.randomUUID();
+                  const iKey = await mc.unwrapItemKey(exKey, old.wrappedKey, remote.vaultId, oldId);
+                  const pos = map.get(`${oldId}:0`);
+                  const cipher = view.slice(pos.off, pos.off + pos.f.size);
+                  const p2 = await mc.decryptChunk(iKey, cipher, old.chunks[0].iv, remote.vaultId, oldId, 0, true);
+                  const box2 = await mc.encryptChunk(iKey, p2, st.vaultId, newId, 0, true);
+                  const b2 = new Uint8Array(box2.ciphertext);
+                  let up2 = await fetch(`/api/media/items/${newId}/chunks/0`, {method:'PUT', headers:{...hdr(derived.token), 'Content-Length': String(b2.length)}, body: b2});
+                  if (!up2.ok) throw new Error('import chunk');
+                  let c2 = await fetch(`/api/media/items/${newId}/commit`, {method:'POST', headers:{...hdr(derived.token), 'Content-Type':'application/json'}, body: JSON.stringify({chunkCount:1, plaintextSize: old.plaintextSize})});
+                  if (!c2.ok) throw new Error('import commit');
+                  const dec = await mc.decryptChunk(iKey, b2, box2.iv, st.vaultId, newId, 0, true);
+                  return new TextDecoder().decode(dec) === 'synthetic-lvmedia-roundtrip';
+                }''', [PASSWORD, MEDIA_PASSWORD])
+                assert media_roundtrip
+                ok('Media second unlock and .lvmedia import re-encrypt round-trip')
                 with page.expect_download(timeout=90000) as info:
                     page.locator('#export').click()
                 backup = tmp/'backup.lvbak'; info.value.save_as(backup)
@@ -354,7 +461,7 @@ def main():
                 ok('Idle auto-lock at selected one-minute interval')
                 # Restart only our temporary test server, never a real Umbrel app.
                 procs[0].terminate(); procs[0].wait(timeout=10)
-                restarted_env={**os.environ,'VAULT_DATA':str(tmp/'data18449'),'VAULT_ORIGIN':origin,'VAULT_BIND':'127.0.0.1','VAULT_PORT':'18449','VAULT_CERT':str(tmp/'test.crt'),'VAULT_KEY':str(tmp/'test.key')}
+                restarted_env=e2e_server_env({**os.environ,'VAULT_DATA':str(tmp/'data18449'),'VAULT_ORIGIN':origin,'VAULT_BIND':'127.0.0.1','VAULT_PORT':'18449','VAULT_CERT':str(tmp/'test.crt'),'VAULT_KEY':str(tmp/'test.key')})
                 procs[0]=subprocess.Popen(['python3',str(ROOT/'server.py')],env=restarted_env,stdout=subprocess.DEVNULL)
                 wait_ready(origin,procs[0])
                 page.reload(); expect(page.locator('#gate-title')).to_have_text('Unlock your vault')

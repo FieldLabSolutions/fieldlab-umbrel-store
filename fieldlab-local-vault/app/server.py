@@ -17,6 +17,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
+import media_api
+
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('VAULT_DATA', '/data'))
 HTTP_PORT = int(os.environ.get('VAULT_HTTP_PORT', '8080'))
@@ -34,7 +36,8 @@ MAX_INDEX = 8 * 1024 * 1024
 ID = re.compile(r'^[0-9a-f-]{36}$')
 # Top-level document navigations from the HTTP landing page (different port) use cross-site fetches.
 NAV_STATIC_PATHS = frozenset({
-    '/', '/index.html', '/app.js', '/crypto.js', '/style.css',
+    '/', '/index.html', '/app.js', '/crypto.js', '/media-crypto.js', '/media.js',
+    '/media-sw.js', '/style.css',
     '/favicon.ico', '/favicon-32x32.png', '/apple-touch-icon.png', '/ca',
 })
 FAVICON_LINKS = (
@@ -310,7 +313,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header(
             'Content-Security-Policy',
             "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
-            "img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+            "img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self'; "
+            "base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
         )
         self.send_header('Connection', 'close')
 
@@ -365,6 +369,40 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return s
 
+    def media_route(self, verb):
+        path = self.path.split('?', 1)[0].split('#', 1)[0]
+        if not path.startswith('/api/media'):
+            return False
+        with LOCK:
+            main = self.auth()
+        if main is None:
+            return True
+        if verb == 'GET':
+            if media_api.handle_media_get(self, DATA, main, path, self.headers, self.reply):
+                return True
+            return self.reply(404, {'error': 'Not found'}) or True
+        if verb == 'POST':
+            try:
+                if media_api.handle_media_post(self, DATA, main, path, self.headers, self.read_json, self.reply):
+                    return True
+            except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.reply(400, {'error': 'Invalid request'})
+                return True
+        if verb == 'PUT':
+            if media_api.handle_media_put_vault(self, DATA, main, path, self.headers, self.read_json, self.reply):
+                return True
+            try:
+                if media_api.handle_media_put(self, DATA, main, path, self.headers, self.reply):
+                    return True
+            except ValueError:
+                self.reply(400, {'error': 'Invalid upload'})
+                return True
+        if verb == 'DELETE':
+            if media_api.handle_media_delete(self, DATA, main, path, self.headers, self.reply):
+                return True
+        self.reply(404, {'error': 'Not found'})
+        return True
+
     def read_json(self):
         n = int(self.headers.get('Content-Length', '-1'))
         if not 0 <= n <= MAX_INDEX * 2:
@@ -382,6 +420,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             if not self.guard():
+                return
+            if self.media_route('GET'):
                 return
             if self.path == '/api/status':
                 with LOCK:
@@ -464,6 +504,9 @@ class Handler(BaseHTTPRequestHandler):
                 '/apple-touch-icon.png': ('apple-touch-icon.png', 'image/png'),
                 '/app.js': ('app.js', 'text/javascript'),
                 '/crypto.js': ('crypto.js', 'text/javascript'),
+                '/media-crypto.js': ('media-crypto.js', 'text/javascript'),
+                '/media.js': ('media.js', 'text/javascript'),
+                '/media-sw.js': ('media-sw.js', 'text/javascript'),
                 '/bip39.js': ('bip39.js', 'text/javascript'),
                 '/bip39-data.js': ('bip39-data.js', 'text/javascript'),
                 '/bip39-english.txt': ('bip39-english.txt', 'text/plain; charset=utf-8'),
@@ -485,6 +528,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if not self.guard():
                 return
+            if self.media_route('POST'):
+                return
             if self.path != '/api/setup':
                 return self.reply(404, {'error': 'Not found'})
             s = self.read_json()
@@ -503,6 +548,8 @@ class Handler(BaseHTTPRequestHandler):
         temp = None
         try:
             if not self.guard():
+                return
+            if self.media_route('PUT'):
                 return
             with LOCK:
                 old = self.auth()
@@ -554,6 +601,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if not self.guard():
                 return
+            if self.media_route('DELETE'):
+                return
             with LOCK:
                 if not self.auth():
                     return
@@ -597,6 +646,7 @@ def main():
     os.umask(0o077)
     DATA.mkdir(parents=True, exist_ok=True)
     (DATA / 'files').mkdir(exist_ok=True)
+    (DATA / 'media' / 'blobs').mkdir(parents=True, exist_ok=True)
     if not CONFIGURED_ORIGIN and os.environ.get('VAULT_ENABLE_LANDING_HTTP', '1') != '0':
         threading.Thread(target=serve_http, daemon=True).start()
     srv = VaultServer((HTTPS_BIND, HTTPS_PORT), Handler)
