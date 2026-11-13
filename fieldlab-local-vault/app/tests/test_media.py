@@ -175,6 +175,31 @@ class MediaApiTests(unittest.TestCase):
             p.terminate()
             p.wait(timeout=10)
 
+    def test_commit_rejects_on_disk_over_item_budget(self):
+        env = {
+            **self.env,
+            'VAULT_MEDIA_MAX_ITEM_BYTES': '8192',
+            'VAULT_PORT': '19603',
+            'VAULT_ORIGIN': 'https://127.0.0.1:19603',
+        }
+        p = subprocess.Popen(['python3', str(ROOT / 'server.py')], env=env, stdout=subprocess.DEVNULL)
+        origin = env['VAULT_ORIGIN']
+        try:
+            wait_ready(origin, p)
+            item = '66666666-6666-4666-8666-666666666666'
+            blob_dir = self.data / 'media' / 'blobs' / item
+            blob_dir.mkdir(parents=True, exist_ok=True)
+            (blob_dir / '0.bin').write_bytes(b'x' * 9000)
+            body = json.dumps({'chunkCount': 1, 'plaintextSize': 100}).encode()
+            headers = {**self.auth_both(), 'Content-Type': 'application/json', 'Content-Length': str(len(body))}
+            code, _, _ = request(
+                origin, f'/api/media/items/{item}/commit', method='POST', body=body, headers=headers,
+            )
+            self.assertEqual(code, 413)
+        finally:
+            p.terminate()
+            p.wait(timeout=10)
+
     def test_quota_exceeded(self):
         item = '44444444-4444-4444-8444-444444444444'
         big = b'x' * (1024 * 1024)

@@ -60,7 +60,8 @@ self.addEventListener('fetch', event => {
       if (range?.startsWith('bytes=')) {
         const [a, b] = range.slice(6).split('-');
         start = a ? parseInt(a, 10) : Math.max(0, total - parseInt(b, 10));
-        end = b ? parseInt(b, 10) : total - 1;
+        end = b ? Math.min(parseInt(b, 10), total - 1) : total - 1;
+        start = Math.min(start, total - 1);
       }
       const body = await decryptRange(spec, start, end);
       const headers = {'Content-Type': spec.mime || 'video/mp4', 'Accept-Ranges': 'bytes', 'Content-Length': String(body.length)};

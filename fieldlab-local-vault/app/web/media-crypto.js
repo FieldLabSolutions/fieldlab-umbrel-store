@@ -25,6 +25,11 @@ export async function generateMediaKey() {
   return crypto.subtle.importKey('raw', random(32), 'AES-GCM', true, ['encrypt', 'decrypt', 'wrapKey', 'unwrapKey']);
 }
 
+export async function mediaKeyForSession(extractableMediaKey) {
+  const raw = await crypto.subtle.exportKey('raw', extractableMediaKey);
+  return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt', 'wrapKey', 'unwrapKey']);
+}
+
 export async function wrapMediaKey(kek, mediaKey, vaultId) {
   const iv = random(12);
   const wrapped = await crypto.subtle.wrapKey('raw', mediaKey, kek, {name: 'AES-GCM', iv, additionalData: utf8.encode(mediaWrapAAD(vaultId))});

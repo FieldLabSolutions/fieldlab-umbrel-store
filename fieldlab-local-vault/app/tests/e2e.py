@@ -34,6 +34,15 @@ def request(origin, path, method='GET', body=None, headers=None):
     except urllib.error.HTTPError as e:
         return e.code, e.read()
 
+def e2e_server_env(extra):
+    """Hermetic media limits for CI/VMs (production defaults stay in server.py)."""
+    return {
+        **extra,
+        'VAULT_MEDIA_MIN_DISK_FREE_BYTES': '0',
+        'VAULT_MEDIA_QUOTA_BYTES': str(512 * 1024 * 1024),
+    }
+
+
 def wait_ready(origin, proc):
     for _ in range(100):
         if proc.poll() is not None:
@@ -82,7 +91,7 @@ def main():
         try:
             for port in (18449,18450):
                 origin = f'https://127.0.0.1:{port}'
-                env = {**os.environ, 'VAULT_DATA':str(tmp/f'data{port}'), 'VAULT_ORIGIN':origin, 'VAULT_BIND':'127.0.0.1', 'VAULT_PORT':str(port), 'VAULT_CERT':str(tmp/'test.crt'), 'VAULT_KEY':str(tmp/'test.key')}
+                env = e2e_server_env({**os.environ, 'VAULT_DATA':str(tmp/f'data{port}'), 'VAULT_ORIGIN':origin, 'VAULT_BIND':'127.0.0.1', 'VAULT_PORT':str(port), 'VAULT_CERT':str(tmp/'test.crt'), 'VAULT_KEY':str(tmp/'test.key')})
                 p = subprocess.Popen(['python3',str(ROOT/'server.py')], env=env, stdout=subprocess.DEVNULL)
                 procs.append(p); wait_ready(origin,p)
             origin = 'https://127.0.0.1:18449'
@@ -111,7 +120,7 @@ def main():
             assert b'apple-touch-icon' in body and b'favicon.ico' in body
             landing_http_port = 18080
             land_origin = 'https://127.0.0.1:18500'
-            land_env = {
+            land_env = e2e_server_env({
                 **os.environ,
                 'VAULT_DATA': str(tmp / 'dataLanding'),
                 'VAULT_BIND': '127.0.0.1',
@@ -119,7 +128,7 @@ def main():
                 'VAULT_HTTP_PORT': str(landing_http_port),
                 'VAULT_CERT': str(tmp / 'test.crt'),
                 'VAULT_KEY': str(tmp / 'test.key'),
-            }
+            })
             land_env.pop('VAULT_ORIGIN', None)
             land_proc = subprocess.Popen(['python3', str(ROOT / 'server.py')], env=land_env, stdout=subprocess.DEVNULL)
             procs.append(land_proc)
@@ -452,7 +461,7 @@ def main():
                 ok('Idle auto-lock at selected one-minute interval')
                 # Restart only our temporary test server, never a real Umbrel app.
                 procs[0].terminate(); procs[0].wait(timeout=10)
-                restarted_env={**os.environ,'VAULT_DATA':str(tmp/'data18449'),'VAULT_ORIGIN':origin,'VAULT_BIND':'127.0.0.1','VAULT_PORT':'18449','VAULT_CERT':str(tmp/'test.crt'),'VAULT_KEY':str(tmp/'test.key')}
+                restarted_env=e2e_server_env({**os.environ,'VAULT_DATA':str(tmp/'data18449'),'VAULT_ORIGIN':origin,'VAULT_BIND':'127.0.0.1','VAULT_PORT':'18449','VAULT_CERT':str(tmp/'test.crt'),'VAULT_KEY':str(tmp/'test.key')})
                 procs[0]=subprocess.Popen(['python3',str(ROOT/'server.py')],env=restarted_env,stdout=subprocess.DEVNULL)
                 wait_ready(origin,procs[0])
                 page.reload(); expect(page.locator('#gate-title')).to_have_text('Unlock your vault')

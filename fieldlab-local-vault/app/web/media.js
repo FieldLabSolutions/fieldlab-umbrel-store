@@ -1,5 +1,5 @@
 import {
-  deriveMedia, generateMediaKey, wrapMediaKey, unwrapMediaKey, wrapItemKey, unwrapItemKey,
+  deriveMedia, generateMediaKey, mediaKeyForSession, wrapMediaKey, unwrapMediaKey, wrapItemKey, unwrapItemKey,
   sealMediaIndex, openMediaIndex, encryptFileChunks, encryptChunk, decryptChunk, encryptMeta, decryptMeta,
   encryptThumb, decryptThumb,
   CHUNK_PLAIN, MAX_MEDIA_ITEM,
@@ -95,8 +95,9 @@ async function unlockMediaFlow(mainSession, masterDigestB64, onMessage, onBusy) 
   let envelope;
   let mediaKey;
   if (setup) {
-    mediaKey = await generateMediaKey();
-    const wrap = await wrapMediaKey(derived.key, mediaKey, mainSession.config.vaultId);
+    const mediaKeyWrapping = await generateMediaKey();
+    const wrap = await wrapMediaKey(derived.key, mediaKeyWrapping, mainSession.config.vaultId);
+    mediaKey = await mediaKeyForSession(mediaKeyWrapping);
     const index = {version: 1, items: []};
     const sealed = await sealMediaIndex(mediaKey, index, mainSession.config.vaultId);
     envelope = {
@@ -520,8 +521,9 @@ async function importLvmedia(mainSession, file, onMessage, onBusy) {
     const metaBox = await encryptMeta(itemKey, meta, destVault, newId);
     item.metaIv = metaBox.metaIv;
     item.metaCiphertext = metaBox.metaCiphertext;
-    const thumbPos = byItem.get(`${oldId}:thumb`);
-    if (thumbPos && item.thumbIv) {
+    if (item.thumbIv) {
+      const thumbPos = byItem.get(`${oldId}:thumb`);
+      if (!thumbPos) throw Error('Missing thumbnail in archive.');
       const cipher = new Uint8Array(await file.slice(thumbPos.offset, thumbPos.offset + thumbPos.entry.size).arrayBuffer());
       const plain = await decryptThumb(itemKey, item.thumbIv, cipher, remote.vaultId, oldId);
       const tbox = await encryptThumb(itemKey, plain, destVault, newId);

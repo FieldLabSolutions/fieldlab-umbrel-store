@@ -395,6 +395,9 @@ def handle_media_post(handler, data: Path, main_state, path: str, headers, read_
             for i in range(chunk_count):
                 if not chunk_path(data, item_id, i).is_file():
                     return reply_fn(400, {'error': 'Upload incomplete'})
+            on_disk = item_data_bytes(data, item_id)
+            if on_disk > max_item_ciphertext(max_item):
+                return reply_fn(413, {'error': 'Item exceeds maximum size'})
             ms = reconcile_used_bytes(data, media_state(data))
         return reply_fn(200, {'ok': True, 'usedBytes': ms['usedBytes']})
     return False
