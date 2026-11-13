@@ -29,6 +29,8 @@ async function decryptRange(spec, start, end) {
     const plain = new Uint8Array(await crypto.subtle.decrypt(
       {name: 'AES-GCM', iv: Uint8Array.from(atob(iv), c => c.charCodeAt(0)), additionalData: new TextEncoder().encode(aad)}, key, cipher
     ));
+    const expected = final ? spec.size - i * PLAIN : PLAIN;
+    if (plain.length !== expected) throw Error('decrypted chunk length mismatch');
     parts.push({index: i, plain});
   }
   const out = new Uint8Array(end - start + 1);
@@ -46,6 +48,7 @@ async function decryptRange(spec, start, end) {
 
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/__vault-media/')) {
     const itemId = url.pathname.split('/')[2];
     const spec = jobs.get(itemId);

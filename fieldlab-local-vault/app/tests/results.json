@@ -16,6 +16,7 @@
     "Stale revision cannot overwrite newer vault",
     "Oversize encrypted upload rejected without reading its body",
     "Media API requires main session and media token",
+    "Media second unlock and .lvmedia import re-encrypt round-trip",
     "Whole-vault encrypted export contains no test-note plaintext",
     "Legacy v1 standalone files migrate into Unfiled files on unlock",
     "Wrong backup password imports nothing",

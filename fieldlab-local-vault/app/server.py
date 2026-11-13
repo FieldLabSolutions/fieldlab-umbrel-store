@@ -375,12 +375,12 @@ class Handler(BaseHTTPRequestHandler):
             return False
         with LOCK:
             main = self.auth()
+        if main is None:
+            return True
         if verb == 'GET':
             if media_api.handle_media_get(self, DATA, main, path, self.headers, self.reply):
                 return True
             return self.reply(404, {'error': 'Not found'}) or True
-        if main is None:
-            return True
         if verb == 'POST':
             try:
                 if media_api.handle_media_post(self, DATA, main, path, self.headers, self.read_json, self.reply):

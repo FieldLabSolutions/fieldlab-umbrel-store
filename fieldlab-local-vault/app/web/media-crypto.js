@@ -9,13 +9,20 @@ export const mediaWrapAAD = vaultId => `local-vault:media:wrap:${vaultId}`;
 export const itemWrapAAD = (vaultId, itemId) => `local-vault:media:item-wrap:${vaultId}:${itemId}`;
 export const mediaIndexAAD = vaultId => `local-vault:media:index:${vaultId}`;
 export const mediaMetaAAD = (vaultId, itemId) => `local-vault:media:meta:${vaultId}:${itemId}`;
+export const mediaThumbAAD = (vaultId, itemId) => `local-vault:media:thumb:${vaultId}:${itemId}`;
 
 export async function deriveMedia(password, salt, iterations = ITERATIONS) {
-  return derive(password, salt, iterations);
+  if (iterations !== ITERATIONS || unb64(salt).length !== 32) throw Error('Unsupported vault encryption settings');
+  const base = await crypto.subtle.importKey('raw', utf8.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = new Uint8Array(await crypto.subtle.deriveBits({name: 'PBKDF2', hash: 'SHA-256', salt: unb64(salt), iterations}, base, 512));
+  const key = await crypto.subtle.importKey('raw', bits.slice(0, 32), 'AES-GCM', false, ['encrypt', 'decrypt', 'wrapKey', 'unwrapKey']);
+  const token = b64(bits.slice(32));
+  bits.fill(0);
+  return {key, token};
 }
 
 export async function generateMediaKey() {
-  return crypto.subtle.importKey('raw', random(32), 'AES-GCM', false, ['encrypt', 'decrypt', 'wrapKey', 'unwrapKey']);
+  return crypto.subtle.importKey('raw', random(32), 'AES-GCM', true, ['encrypt', 'decrypt', 'wrapKey', 'unwrapKey']);
 }
 
 export async function wrapMediaKey(kek, mediaKey, vaultId) {
@@ -41,7 +48,7 @@ export async function wrapItemKey(mediaKey, itemKey, vaultId, itemId) {
 export async function unwrapItemKey(mediaKey, entry, vaultId, itemId) {
   return crypto.subtle.unwrapKey(
     'raw', unb64(entry.wrapped), mediaKey, {name: 'AES-GCM', iv: unb64(entry.iv), additionalData: utf8.encode(itemWrapAAD(vaultId, itemId))},
-    'AES-GCM', false, ['encrypt', 'decrypt']
+    'AES-GCM', true, ['encrypt', 'decrypt']
   );
 }
 
@@ -74,6 +81,15 @@ export async function encryptMeta(itemKey, meta, vaultId, itemId) {
 export async function decryptMeta(itemKey, metaIv, metaCiphertext, vaultId, itemId) {
   const raw = await decrypt(itemKey, unb64(metaCiphertext), metaIv, mediaMetaAAD(vaultId, itemId));
   return JSON.parse(new TextDecoder().decode(raw));
+}
+
+export async function encryptThumb(itemKey, bytes, vaultId, itemId) {
+  const box = await encrypt(itemKey, bytes, mediaThumbAAD(vaultId, itemId));
+  return {thumbIv: box.iv, ciphertext: box.ciphertext};
+}
+
+export async function decryptThumb(itemKey, iv, ciphertext, vaultId, itemId) {
+  return decrypt(itemKey, ciphertext, iv, mediaThumbAAD(vaultId, itemId));
 }
 
 export function chunkCount(size) {

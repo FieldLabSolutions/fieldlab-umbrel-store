@@ -18,8 +18,11 @@ _MEDIA_LOCK = threading.RLock()
 _EXPORT_TOKENS = {}
 _ID = re.compile(r'^[0-9a-f-]{36}$')
 _CHUNK = re.compile(r'^/api/media/items/([0-9a-f-]{36})/chunks/([0-9]+)$')
+_THUMB = re.compile(r'^/api/media/items/([0-9a-f-]{36})/thumb$')
 _MAGIC = b'LVMEDIA01'
 _MAX_INDEX = 8 * 1024 * 1024
+_CHUNK_PLAIN = 4 * 1024 * 1024
+_MAX_THUMB = 512 * 1024 + 16
 
 
 def media_paths(data: Path):
@@ -31,7 +34,7 @@ def media_env_limits(data: Path):
     quota = int(os.environ.get('VAULT_MEDIA_QUOTA_BYTES', str(100 * 1024 ** 3)))
     min_free = int(os.environ.get('VAULT_MEDIA_MIN_DISK_FREE_BYTES', str(50 * 1024 ** 3)))
     max_item = int(os.environ.get('VAULT_MEDIA_MAX_ITEM_BYTES', str(4 * 1024 ** 3)))
-    chunk_max = max_item + 16
+    chunk_max = _CHUNK_PLAIN + 16
     return quota, min_free, max_item, chunk_max
 
 
@@ -102,6 +105,28 @@ def chunk_path(data: Path, item_id: str, index: int) -> Path:
     if index < 0 or index > 1_000_000:
         raise ValueError('Invalid chunk index')
     return media_blob_dir(data, item_id) / f'{index}.bin'
+
+
+def thumb_path(data: Path, item_id: str) -> Path:
+    return media_blob_dir(data, item_id) / 'thumb.bin'
+
+
+def max_item_ciphertext(max_item: int) -> int:
+    chunks = (max_item + _CHUNK_PLAIN - 1) // _CHUNK_PLAIN
+    return max_item + chunks * 16
+
+
+def item_data_bytes(data: Path, item_id: str) -> int:
+    item_dir = media_blob_dir(data, item_id)
+    if not item_dir.is_dir():
+        return 0
+    total = 0
+    for path in item_dir.iterdir():
+        if path.name == 'thumb.bin':
+            total += path.stat().st_size
+        elif path.name.endswith('.bin') and path.name[:-4].isdigit():
+            total += path.stat().st_size
+    return total
 
 
 def media_used_bytes(data: Path) -> int:
@@ -215,11 +240,20 @@ def media_export_stream(handler, data: Path, ms):
         for item_dir in sorted(blobs.iterdir()):
             if not item_dir.is_dir() or not _ID.fullmatch(item_dir.name):
                 continue
+            thumb = item_dir / 'thumb.bin'
+            if thumb.is_file():
+                files.append({
+                    'itemId': item_dir.name,
+                    'kind': 'thumb',
+                    'size': thumb.stat().st_size,
+                    'path': str(thumb.relative_to(data)),
+                })
             for chunk in sorted(item_dir.glob('*.bin')):
                 if not chunk.name[:-4].isdigit():
                     continue
                 files.append({
                     'itemId': item_dir.name,
+                    'kind': 'chunk',
                     'chunk': int(chunk.name[:-4]),
                     'size': chunk.stat().st_size,
                     'path': str(chunk.relative_to(data)),
@@ -247,13 +281,11 @@ def handle_media_get(handler, data: Path, main_state, path: str, headers, reply_
     if '?' in handler.path:
         path, query = handler.path.split('?', 1)
     if path == '/api/media/status':
-        if not main_state:
-            return reply_fn(401, {'error': 'Wrong password or locked vault'})
         with _MEDIA_LOCK:
             ms = media_state(data)
             quota, min_free, max_item, _ = media_env_limits(data)
             free = shutil.disk_usage(data).free
-            return reply_fn(200, {
+            reply_fn(200, {
                 'initialized': bool(ms),
                 'uploadAllowed': disk_ok(data),
                 'diskFreeBytes': free,
@@ -262,6 +294,7 @@ def handle_media_get(handler, data: Path, main_state, path: str, headers, reply_
                 'minDiskFreeBytes': min_free,
                 **({k: ms[k] for k in ('version', 'vaultId', 'salt', 'iterations', 'revision', 'usedBytes')} if ms else {}),
             })
+            return True
     if path == '/api/media/vault':
         with _MEDIA_LOCK:
             ms = media_state(data)
@@ -284,6 +317,18 @@ def handle_media_get(handler, data: Path, main_state, path: str, headers, reply_
             blob = chunk_path(data, item_id, index)
             if not blob.is_file():
                 return reply_fn(404, {'error': 'Chunk missing'})
+        stream_file_with_range(handler, blob, headers.get('Range'))
+        return True
+    t = _THUMB.match(path)
+    if t:
+        item_id = t.group(1)
+        with _MEDIA_LOCK:
+            if not media_auth(data, main_state, headers, reply_fn):
+                return True
+            blob = thumb_path(data, item_id)
+            if not blob.is_file():
+                reply_fn(404, {'error': 'Thumbnail missing'})
+                return True
         stream_file_with_range(handler, blob, headers.get('Range'))
         return True
     if path.startswith('/api/media/export/'):
@@ -335,12 +380,18 @@ def handle_media_post(handler, data: Path, main_state, path: str, headers, read_
         item_id = m.group(1)
         body = read_json()
         chunk_count = body.get('chunkCount')
+        plaintext_size = body.get('plaintextSize')
         if type(chunk_count) is not int or chunk_count < 1 or chunk_count > 1_000_000:
             raise ValueError('Invalid chunk count')
+        _, _, max_item, _ = media_env_limits(data)
+        if type(plaintext_size) is not int or not 1 <= plaintext_size <= max_item:
+            return reply_fn(413, {'error': 'Item exceeds maximum size'})
+        expected = (plaintext_size + _CHUNK_PLAIN - 1) // _CHUNK_PLAIN
+        if chunk_count != expected:
+            return reply_fn(400, {'error': 'Chunk count mismatch'})
         with _MEDIA_LOCK:
             if not media_auth(data, main_state, headers, reply_fn):
                 return
-            item_dir = media_blob_dir(data, item_id)
             for i in range(chunk_count):
                 if not chunk_path(data, item_id, i).is_file():
                     return reply_fn(400, {'error': 'Upload incomplete'})
@@ -350,6 +401,48 @@ def handle_media_post(handler, data: Path, main_state, path: str, headers, read_
 
 
 def handle_media_put(handler, data: Path, main_state, path: str, headers, reply_fn):
+    m = _THUMB.match(path)
+    if m:
+        item_id = m.group(1)
+        n = int(headers.get('Content-Length', '-1'))
+        if not 16 <= n <= _MAX_THUMB:
+            return reply_fn(413, {'error': 'Thumbnail too large'})
+        with _MEDIA_LOCK:
+            if not media_auth(data, main_state, headers, reply_fn):
+                return True
+            if not disk_ok(data):
+                return reply_fn(507, {'error': 'Insufficient disk space'})
+            ms = reconcile_used_bytes(data, media_state(data))
+            quota, _, max_item, _ = media_env_limits(data)
+            prior = item_data_bytes(data, item_id)
+            thumb = thumb_path(data, item_id)
+            prior -= thumb.stat().st_size if thumb.is_file() else 0
+            if prior + n > max_item_ciphertext(max_item):
+                return reply_fn(413, {'error': 'Item exceeds maximum size'})
+            if ms['usedBytes'] + n > quota:
+                return reply_fn(413, {'error': 'Media quota exceeded'})
+            media_blob_dir(data, item_id).mkdir(parents=True, exist_ok=True)
+            if thumb.exists():
+                return reply_fn(409, {'error': 'Thumbnail already uploaded'})
+            fd, temp = tempfile.mkstemp(prefix='.thumb-', dir=media_blob_dir(data, item_id))
+            try:
+                with os.fdopen(fd, 'wb') as f:
+                    remaining = n
+                    while remaining:
+                        block = handler.rfile.read(min(1024 * 1024, remaining))
+                        if not block:
+                            raise ValueError('Incomplete upload')
+                        f.write(block)
+                        remaining -= len(block)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp, thumb)
+                temp = None
+                ms = reconcile_used_bytes(data, ms)
+            finally:
+                if temp and os.path.exists(temp):
+                    os.unlink(temp)
+        return reply_fn(201, {'ok': True, 'usedBytes': ms['usedBytes']})
     m = _CHUNK.match(path)
     if not m:
         return False
@@ -365,7 +458,14 @@ def handle_media_put(handler, data: Path, main_state, path: str, headers, reply_
             return True
         if not disk_ok(data):
             return reply_fn(507, {'error': 'Insufficient disk space'})
+        ms = reconcile_used_bytes(data, media_state(data))
         quota, _, _, _ = media_env_limits(data)
+        prior = item_data_bytes(data, item_id)
+        dest = chunk_path(data, item_id, index)
+        if dest.exists():
+            prior -= dest.stat().st_size
+        if prior + n > max_item_ciphertext(max_item):
+            return reply_fn(413, {'error': 'Item exceeds maximum size'})
         if ms['usedBytes'] + n > quota:
             return reply_fn(413, {'error': 'Media quota exceeded'})
         item_dir = media_blob_dir(data, item_id)

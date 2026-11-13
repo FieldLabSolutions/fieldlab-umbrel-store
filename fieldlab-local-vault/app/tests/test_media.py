@@ -138,6 +138,43 @@ class MediaApiTests(unittest.TestCase):
         code, _, _ = request(self.origin, f'/api/media/items/{item}/chunks/0', method='PUT', body=b'', headers=headers)
         self.assertEqual(code, 413)
 
+    def test_unauthenticated_media_get_single_response(self):
+        code, body, _ = request(self.origin, '/api/media/status')
+        self.assertEqual(code, 401)
+        data = json.loads(body.decode())
+        self.assertIn('error', data)
+
+    def test_second_unlock_media_token(self):
+        code, body, _ = request(self.origin, '/api/media/vault', headers=self.auth_both())
+        self.assertEqual(code, 200)
+        rev = json.loads(body)['revision']
+        code2, body2, _ = request(self.origin, '/api/media/vault', headers=self.auth_both())
+        self.assertEqual(code2, 200)
+        self.assertEqual(json.loads(body2)['revision'], rev)
+
+    def test_item_total_size_server_limit(self):
+        env = {
+            **self.env,
+            'VAULT_MEDIA_MAX_ITEM_BYTES': '8192',
+            'VAULT_PORT': '19602',
+            'VAULT_ORIGIN': 'https://127.0.0.1:19602',
+            'VAULT_MEDIA_QUOTA_BYTES': str(100 * 1024 * 1024),
+        }
+        p = subprocess.Popen(['python3', str(ROOT / 'server.py')], env=env, stdout=subprocess.DEVNULL)
+        origin = env['VAULT_ORIGIN']
+        try:
+            wait_ready(origin, p)
+            item = '55555555-5555-4555-8555-555555555555'
+            chunk = b'x' * 5000
+            headers = {**self.auth_both(), 'Content-Length': str(len(chunk))}
+            code, _, _ = request(origin, f'/api/media/items/{item}/chunks/0', method='PUT', body=chunk, headers=headers)
+            self.assertEqual(code, 201)
+            code, _, _ = request(origin, f'/api/media/items/{item}/chunks/1', method='PUT', body=chunk, headers=headers)
+            self.assertEqual(code, 413)
+        finally:
+            p.terminate()
+            p.wait(timeout=10)
+
     def test_quota_exceeded(self):
         item = '44444444-4444-4444-8444-444444444444'
         big = b'x' * (1024 * 1024)

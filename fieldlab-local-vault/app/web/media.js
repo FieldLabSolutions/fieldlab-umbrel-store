@@ -1,7 +1,8 @@
 import {
   deriveMedia, generateMediaKey, wrapMediaKey, unwrapMediaKey, wrapItemKey, unwrapItemKey,
-  sealMediaIndex, openMediaIndex, encryptFileChunks, decryptChunk, encryptMeta, decryptMeta,
-  CHUNK_PLAIN, MAX_MEDIA_ITEM, chunkCount,
+  sealMediaIndex, openMediaIndex, encryptFileChunks, encryptChunk, decryptChunk, encryptMeta, decryptMeta,
+  encryptThumb, decryptThumb,
+  CHUNK_PLAIN, MAX_MEDIA_ITEM,
 } from './media-crypto.js';
 import {authHash, b64, random, ITERATIONS, utf8} from './crypto.js';
 
@@ -21,10 +22,11 @@ export async function initMediaServiceWorker() {
   swReg = await navigator.serviceWorker.register('/media-sw.js', {scope: '/'});
 }
 
-async function mediaApi(path, options = {}, mainSession) {
+async function mediaApi(path, options = {}, mainSession, mediaToken = null) {
   const headers = new Headers(options.headers);
   headers.set('Authorization', `Bearer ${mainSession.token}`);
-  if (mediaSession) headers.set('X-Media-Authorization', `Bearer ${mediaSession.token}`);
+  const mt = mediaToken ?? mediaSession?.token;
+  if (mt) headers.set('X-Media-Authorization', `Bearer ${mt}`);
   if (typeof options.body === 'string') headers.set('Content-Type', 'application/json');
   const response = await fetch(path, {...options, headers, cache: 'no-store', signal: mainSession.abort.signal});
   if (!response.ok) {
@@ -103,10 +105,10 @@ async function unlockMediaFlow(mainSession, masterDigestB64, onMessage, onBusy) 
       indexIv: sealed.indexIv, indexCiphertext: sealed.indexCiphertext, usedBytes: 0,
       authHash: await authHash(derived.token),
     };
-    await mediaApi('/api/media/setup', {method: 'POST', body: JSON.stringify(envelope)}, mainSession);
+    await mediaApi('/api/media/setup', {method: 'POST', body: JSON.stringify(envelope)}, mainSession, derived.token);
     mediaSession = {token: derived.token, mediaKey, envelope, index, kek: derived.key};
   } else {
-    envelope = await (await mediaApi('/api/media/vault', {}, mainSession)).json();
+    envelope = await (await mediaApi('/api/media/vault', {}, mainSession, derived.token)).json();
     try {
       mediaKey = await unwrapMediaKey(derived.key, envelope.wrapIv, envelope.wrappedKey, envelope.vaultId);
     } catch {
@@ -174,16 +176,21 @@ async function uploadMediaFile(mainSession, file, onMessage, onProgress) {
   const itemId = crypto.randomUUID();
   const itemKey = await crypto.subtle.generateKey({name: 'AES-GCM', length: 256}, true, ['encrypt', 'decrypt']);
   const wrapped = await wrapItemKey(mediaSession.mediaKey, itemKey, mainSession.config.vaultId, itemId);
+  let thumbIv = null;
   const thumbBlob = await makeThumbnail(file);
-  let thumbMeta = {thumb: null};
   if (thumbBlob) {
-    const thumbBytes = await thumbBlob.arrayBuffer();
-    const tbox = await encryptMeta(itemKey, {bytes: b64(thumbBytes)}, mainSession.config.vaultId, itemId);
-    thumbMeta = {thumbIv: tbox.metaIv, thumbCiphertext: tbox.metaCiphertext};
+    const tbox = await encryptThumb(itemKey, await thumbBlob.arrayBuffer(), mainSession.config.vaultId, itemId);
+    thumbIv = tbox.thumbIv;
+    const thumbCipher = new Uint8Array(tbox.ciphertext);
+    await mediaApi(`/api/media/items/${itemId}/thumb`, {
+      method: 'PUT',
+      body: new Blob([thumbCipher], {type: 'application/octet-stream'}),
+      headers: {'Content-Length': String(thumbCipher.byteLength)},
+    }, mainSession);
   }
   const meta = {
     filename: file.name, type: file.type || 'application/octet-stream', size: file.size,
-    date: new Date(file.lastModified || Date.now()).toISOString(), ...thumbMeta,
+    date: new Date(file.lastModified || Date.now()).toISOString(),
   };
   const mbox = await encryptMeta(itemKey, meta, mainSession.config.vaultId, itemId);
   const chunks = await encryptFileChunks(itemKey, file, mainSession.config.vaultId, itemId, onProgress);
@@ -195,36 +202,46 @@ async function uploadMediaFile(mainSession, file, onMessage, onProgress) {
       headers: {'Content-Length': String(c.bytes.byteLength)},
     }, mainSession);
   }
-  await mediaApi(`/api/media/items/${itemId}/commit`, {method: 'POST', body: JSON.stringify({chunkCount: chunks.length})}, mainSession);
+  await mediaApi(`/api/media/items/${itemId}/commit`, {
+    method: 'POST',
+    body: JSON.stringify({chunkCount: chunks.length, plaintextSize: file.size}),
+  }, mainSession);
   const stat = await (await mediaApi('/api/media/status', {}, mainSession)).json();
   mediaSession.envelope.usedBytes = stat.usedBytes;
   mediaSession.index.items.push({
     id: itemId, chunkCount: chunks.length, plaintextSize: file.size,
     wrappedKey: wrapped, metaIv: mbox.metaIv, metaCiphertext: mbox.metaCiphertext,
     chunks: chunks.map(c => ({index: c.index, iv: c.iv})),
+    ...(thumbIv ? {thumbIv} : {}),
   });
   await saveMediaIndex(mainSession);
   return itemId;
 }
 
-async function decryptThumb(item, mainSession) {
+async function decryptThumbBlob(item, mainSession) {
+  if (!item.thumbIv) return null;
   const itemKey = await unwrapItemKey(mediaSession.mediaKey, item.wrappedKey, mainSession.config.vaultId, item.id);
-  const meta = await decryptMeta(itemKey, item.metaIv, item.metaCiphertext, mainSession.config.vaultId, item.id);
-  if (!meta.thumbIv) return null;
-  const inner = await decryptMeta(itemKey, meta.thumbIv, meta.thumbCiphertext, mainSession.config.vaultId, item.id);
-  return new Blob([Uint8Array.from(atob(inner.bytes), c => c.charCodeAt(0))], {type: 'image/jpeg'});
+  const res = await mediaApi(`/api/media/items/${item.id}/thumb`, {}, mainSession);
+  const cipher = await res.arrayBuffer();
+  const plain = new Uint8Array(await decryptThumb(itemKey, item.thumbIv, cipher, mainSession.config.vaultId, item.id));
+  return new Blob([plain], {type: 'image/jpeg'});
 }
 
 async function decryptItemToBlob(item, mainSession) {
   const itemKey = await unwrapItemKey(mediaSession.mediaKey, item.wrappedKey, mainSession.config.vaultId, item.id);
   const parts = [];
+  let total = 0;
   for (let i = 0; i < item.chunkCount; i++) {
     const res = await mediaApi(`/api/media/items/${item.id}/chunks/${i}`, {}, mainSession);
     const cipher = new Uint8Array(await res.arrayBuffer());
     const final = i === item.chunkCount - 1;
     const plain = new Uint8Array(await decryptChunk(itemKey, cipher, item.chunks[i].iv, mainSession.config.vaultId, item.id, i, final));
+    const expected = final ? item.plaintextSize - i * CHUNK_PLAIN : CHUNK_PLAIN;
+    if (plain.length !== expected) throw Error('Decrypted size does not match metadata.');
+    total += plain.length;
     parts.push(plain);
   }
+  if (total !== item.plaintextSize) throw Error('Decrypted size does not match metadata.');
   const meta = await decryptMeta(itemKey, item.metaIv, item.metaCiphertext, mainSession.config.vaultId, item.id);
   return new Blob(parts, {type: meta.type || 'application/octet-stream'});
 }
@@ -337,7 +354,7 @@ async function paintGrid(mainSession, grid, onMessage, onBusy) {
     );
     const img = document.createElement('img');
     img.className = 'media-thumb';
-  const thumb = await decryptThumb(item, mainSession);
+  const thumb = await decryptThumbBlob(item, mainSession);
     if (thumb) {
       const url = URL.createObjectURL(thumb);
       mediaUrls.add(url);
@@ -478,32 +495,61 @@ async function importLvmedia(mainSession, file, onMessage, onBusy) {
   const header = JSON.parse(await file.slice(13, 13 + metaLen).text());
   const remote = header.state;
   const derived = await deriveMedia(password, remote.salt);
-  if (await authHash(derived.token) !== remote.authHash) throw Error('Wrong media password.');
-  const mediaKey = await unwrapMediaKey(derived.key, remote.wrapIv, remote.wrappedKey, remote.vaultId);
-  const importedIndex = await openMediaIndex(mediaKey, remote);
+  let exportMediaKey;
+  try {
+    exportMediaKey = await unwrapMediaKey(derived.key, remote.wrapIv, remote.wrappedKey, remote.vaultId);
+  } catch {
+    throw Error('Wrong media password.');
+  }
+  const importedIndex = await openMediaIndex(exportMediaKey, remote);
   let offset = 13 + metaLen;
   const byItem = new Map();
   for (const entry of header.files) {
-    byItem.set(`${entry.itemId}:${entry.chunk}`, {entry, offset});
+    const key = entry.kind === 'thumb' ? `${entry.itemId}:thumb` : `${entry.itemId}:${entry.chunk}`;
+    byItem.set(key, {entry, offset});
     offset += entry.size;
   }
   if (offset !== file.size) throw Error('Truncated .lvmedia archive.');
+  const destVault = mainSession.config.vaultId;
   for (const item of importedIndex.items) {
     const oldId = item.id;
     const newId = crypto.randomUUID();
-    const oldKey = await unwrapItemKey(mediaKey, item.wrappedKey, remote.vaultId, oldId);
-    item.wrappedKey = await wrapItemKey(mediaSession.mediaKey, oldKey, mainSession.config.vaultId, newId);
-    item.id = newId;
+    const itemKey = await unwrapItemKey(exportMediaKey, item.wrappedKey, remote.vaultId, oldId);
+    item.wrappedKey = await wrapItemKey(mediaSession.mediaKey, itemKey, destVault, newId);
+    const meta = await decryptMeta(itemKey, item.metaIv, item.metaCiphertext, remote.vaultId, oldId);
+    const metaBox = await encryptMeta(itemKey, meta, destVault, newId);
+    item.metaIv = metaBox.metaIv;
+    item.metaCiphertext = metaBox.metaCiphertext;
+    const thumbPos = byItem.get(`${oldId}:thumb`);
+    if (thumbPos && item.thumbIv) {
+      const cipher = new Uint8Array(await file.slice(thumbPos.offset, thumbPos.offset + thumbPos.entry.size).arrayBuffer());
+      const plain = await decryptThumb(itemKey, item.thumbIv, cipher, remote.vaultId, oldId);
+      const tbox = await encryptThumb(itemKey, plain, destVault, newId);
+      item.thumbIv = tbox.thumbIv;
+      const thumbOut = new Uint8Array(tbox.ciphertext);
+      await mediaApi(`/api/media/items/${newId}/thumb`, {
+        method: 'PUT', body: thumbOut, headers: {'Content-Length': String(thumbOut.byteLength)},
+      }, mainSession);
+    }
     for (let i = 0; i < item.chunkCount; i++) {
       const pos = byItem.get(`${oldId}:${i}`);
       if (!pos) throw Error('Missing chunk in archive.');
-      const blob = await file.slice(pos.offset, pos.offset + pos.entry.size).arrayBuffer();
+      const cipher = new Uint8Array(await file.slice(pos.offset, pos.offset + pos.entry.size).arrayBuffer());
+      const final = i === item.chunkCount - 1;
+      const plain = await decryptChunk(itemKey, cipher, item.chunks[i].iv, remote.vaultId, oldId, i, final);
+      const box = await encryptChunk(itemKey, plain, destVault, newId, i, final);
+      const bytes = new Uint8Array(box.ciphertext);
       onMessage(`Importing chunk ${i + 1}/${item.chunkCount}…`);
       await mediaApi(`/api/media/items/${newId}/chunks/${i}`, {
-        method: 'PUT', body: blob, headers: {'Content-Length': String(blob.byteLength)},
+        method: 'PUT', body: bytes, headers: {'Content-Length': String(bytes.byteLength)},
       }, mainSession);
+      item.chunks[i] = {index: i, iv: box.iv};
     }
-    await mediaApi(`/api/media/items/${newId}/commit`, {method: 'POST', body: JSON.stringify({chunkCount: item.chunkCount})}, mainSession);
+    item.id = newId;
+    await mediaApi(`/api/media/items/${newId}/commit`, {
+      method: 'POST',
+      body: JSON.stringify({chunkCount: item.chunkCount, plaintextSize: item.plaintextSize}),
+    }, mainSession);
     mediaSession.index.items.push(item);
   }
   await saveMediaIndex(mainSession);
