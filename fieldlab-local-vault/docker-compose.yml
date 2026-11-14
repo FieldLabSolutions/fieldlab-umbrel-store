@@ -8,7 +8,7 @@ services:
 
   web:
     # Public multi-arch image (linux/amd64 + linux/arm64). Pinned by digest after CI build.
-    image: ghcr.io/fieldlabsolutions/fieldlab-local-vault:1.2.0
+    image: ghcr.io/fieldlabsolutions/fieldlab-local-vault:1.2.0@sha256:b35e465782e986caeaaa9e651291d807d51cac419ebfb62794ad5d96b7d5ebe9
     restart: on-failure
     user: "1000:1000"
     init: true
