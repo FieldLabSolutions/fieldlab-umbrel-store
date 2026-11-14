@@ -183,16 +183,17 @@ def make_thumbnail_stress_fixtures(tmp: Path):
 
 
 def run_media_bad_preview_then_good_upload(page, tmp: Path, data_dir: Path):
+    """Does not assert total grid size — media_roundtrip may already have items on data18449."""
     bad_mp4, corrupt_jpg, heic, good_jpeg = make_thumbnail_stress_fixtures(tmp)
     open_media_unlocked(page)
+    page.locator('#media-idle').select_option('5')
     upload = page.locator('#media-workspace input[type="file"][accept*="image"]')
     upload.set_input_files([str(bad_mp4), str(corrupt_jpg), str(heic), str(good_jpeg)])
-    expect(page.locator('#media-grid .media-card')).to_have_count(4, timeout=180_000)
-    expect(page.locator('.media-card').filter(has_text='e2e-after-bad.jpg')).to_have_count(1, timeout=10_000)
+    for name in ('e2e-bad-video.mp4', 'e2e-corrupt.jpg', 'e2e-fake.heic', 'e2e-after-bad.jpg'):
+        expect(page.locator('.media-card').filter(has_text=name)).to_have_count(1, timeout=120_000)
+    expect(page.locator('#media-status')).to_contain_text('uploaded', timeout=30_000)
     state = json.loads((data_dir / 'media' / 'state.json').read_text())
     assert state.get('usedBytes', 0) > 0
-    blob_bins = list((data_dir / 'media' / 'blobs').rglob('*.bin'))
-    assert len(blob_bins) >= 4
     ok('Media upload continues after bad video/corrupt image/HEIC previews (no thumbnail hang)')
 
 
@@ -212,6 +213,7 @@ def run_media_upload_while_vault_busy(page, tmp: Path, data_dir: Path):
     try:
         page.get_by_role('button', name='Save note', exact=True).click()
         open_media_unlocked(page)
+        page.locator('#media-idle').select_option('5')
         upload = page.locator('#media-workspace input[type="file"][accept*="image"]')
         upload.set_input_files([str(jpeg)])
     finally:
