@@ -109,8 +109,14 @@ def accept_media_password(dialog):
 
 
 def open_media_unlocked(page):
-    page.once('dialog', accept_media_password)
+    if page.locator('#media-workspace').is_visible():
+        return
     page.locator('#open-media').click()
+    try:
+        dialog = page.wait_for_event('dialog', timeout=3000)
+        accept_media_password(dialog)
+    except Exception:
+        pass
     expect(page.locator('#media-workspace')).to_be_visible(timeout=60_000)
     expect(page.locator('#media-workspace')).to_contain_text('Photos & Videos', timeout=10_000)
 
@@ -140,10 +146,11 @@ def run_media_browser_upload(page, tmp: Path, data_dir: Path, tag: str, prod_dis
     blob_bins = list((media_root / 'blobs').rglob('*.bin'))
     assert len(blob_bins) >= 2, 'expected ciphertext chunk blobs on disk'
     page.locator('.media-card').filter(has_text='e2e-media-upload.jpg').get_by_role('button', name='View', exact=True).click()
-    expect(page.locator('img.media-full')).to_be_visible(timeout=30_000)
-    page.locator('.media-viewer button').filter(has_text='Close').click()
+    expect(page.locator('#media-lightbox img.media-full')).to_be_visible(timeout=30_000)
+    page.locator('#media-lightbox').get_by_role('button', name='Close', exact=True).click()
+    expect(page.locator('#media-lightbox')).to_have_count(0, timeout=5000)
     page.locator('.media-card').filter(has_text='e2e-media-upload.mp4').get_by_role('button', name='Play', exact=True).click()
-    expect(page.locator('video.media-full')).to_be_visible(timeout=30_000)
+    expect(page.locator('#media-lightbox video.media-full')).to_be_visible(timeout=30_000)
     page.evaluate('''async () => {
       const v = document.querySelector('video.media-full');
       if (!v) throw new Error('no video');
@@ -157,7 +164,7 @@ def run_media_browser_upload(page, tmp: Path, data_dir: Path, tag: str, prod_dis
       });
       try { await v.play(); } catch (_) { /* headless codec may block play(); metadata load is enough */ }
     }''')
-    page.locator('.media-viewer button').filter(has_text='Close').click()
+    page.locator('#media-lightbox').get_by_role('button', name='Close', exact=True).click()
     page.reload()
     unlock(page)
     open_media_unlocked(page)
@@ -222,6 +229,246 @@ def run_media_upload_while_vault_busy(page, tmp: Path, data_dir: Path):
     state = json.loads((data_dir / 'media' / 'state.json').read_text())
     assert state.get('usedBytes', 0) > 0
     ok('Media upload proceeds while vault save holds vault task busy')
+
+
+def run_media_v120_features(p, tmp: Path, crt: Path, key: Path):
+    """Photos & Videos 1.2.0: lightbox, folders, folder upload, lvmedia folder roundtrip."""
+    port = 18470
+    data_dir = tmp / f'data{port}'
+    origin = f'https://127.0.0.1:{port}'
+    env = e2e_server_env({
+        **os.environ,
+        'VAULT_DATA': str(data_dir),
+        'VAULT_ORIGIN': origin,
+        'VAULT_BIND': '127.0.0.1',
+        'VAULT_PORT': str(port),
+        'VAULT_CERT': str(crt),
+        'VAULT_KEY': str(key),
+    })
+    proc = subprocess.Popen(['python3', str(ROOT / 'server.py')], env=env, stdout=subprocess.DEVNULL)
+    try:
+        wait_ready(origin, proc)
+        jpeg, mp4 = make_media_upload_fixtures(tmp)
+        browser = p.chromium.launch(
+            headless=True,
+            args=['--disable-background-timer-throttling', '--disable-renderer-backgrounding'],
+        )
+        try:
+            ctx = browser.new_context(ignore_https_errors=True, accept_downloads=True)
+            ctx.add_init_script('delete window.showSaveFilePicker;')
+            page = ctx.new_page()
+            create(page, origin)
+            open_media_unlocked(page)
+            v1_seed = tmp / 'e2e-v1-seed.jpg'
+            shutil.copy(jpeg, v1_seed)
+            upload0 = page.locator('#media-workspace input[type="file"][accept*="image"]')
+            upload0.set_input_files([str(v1_seed)])
+            expect(page.locator('.media-card').filter(has_text='e2e-v1-seed.jpg')).to_have_count(1, timeout=180_000)
+            expect(page.locator('#media-status')).to_contain_text('uploaded', timeout=30_000)
+            assert page.evaluate(
+                '''async ([masterPw, mediaPw]) => {
+                  const u = await import('/crypto.js');
+                  const mc = await import('/media-crypto.js');
+                  const cfg = await (await fetch('/api/status')).json();
+                  const main = await u.derive(masterPw, cfg.salt, cfg.iterations);
+                  const vault = await (await fetch('/api/vault', {headers: {Authorization: 'Bearer '+main.token}})).json();
+                  const st = await (await fetch('/api/media/status', {headers: {Authorization: 'Bearer '+main.token}})).json();
+                  const media = await mc.deriveMedia(mediaPw, st.salt);
+                  const env = await (await fetch('/api/media/vault', {headers: {
+                    Authorization: 'Bearer '+main.token,
+                    'X-Media-Authorization': 'Bearer '+media.token,
+                  }})).json();
+                  const mediaKey = await mc.unwrapMediaKey(media.key, env.wrapIv, env.wrappedKey, env.vaultId);
+                  const index = await mc.openMediaIndex(mediaKey, env);
+                  const v1 = {version: 1, items: index.items.map(({folderId, ...rest}) => rest)};
+                  const sealed = await mc.sealMediaIndex(mediaKey, v1, env.vaultId);
+                  for (let attempt = 0; attempt < 8; attempt++) {
+                    const envLatest = await (await fetch('/api/media/vault', {headers: {
+                      Authorization: 'Bearer '+main.token,
+                      'X-Media-Authorization': 'Bearer '+media.token,
+                    }})).json();
+                    const putBody = {
+                      ...envLatest, indexIv: sealed.indexIv, indexCiphertext: sealed.indexCiphertext,
+                      revision: envLatest.revision + 1,
+                    };
+                    const put = await fetch('/api/media/vault', {
+                      method: 'PUT',
+                      headers: {
+                        Authorization: 'Bearer '+main.token,
+                        'X-Media-Authorization': 'Bearer '+media.token,
+                        'Content-Type': 'application/json',
+                      },
+                      body: JSON.stringify(putBody),
+                    });
+                    if (put.ok) return true;
+                    if (put.status !== 409) throw new Error('v1 put '+put.status);
+                    await new Promise(r => setTimeout(r, 150));
+                  }
+                  throw new Error('v1 put retries exhausted');
+                }''',
+                [PASSWORD, MEDIA_PASSWORD],
+            )
+            page.get_by_role('button', name='Lock media', exact=True).click()
+            page.reload()
+            unlock(page)
+            open_media_unlocked(page)
+            expect(page.locator('.media-card').filter(has_text='e2e-v1-seed.jpg')).to_have_count(1, timeout=60_000)
+            page.once('dialog', lambda d: d.accept('Persist v2'))
+            page.get_by_role('button', name='New folder', exact=True).click()
+            page.get_by_role('button', name='Lock media', exact=True).click()
+            page.reload()
+            unlock(page)
+            v2_once = page.evaluate(
+                '''async ([masterPw, mediaPw]) => {
+                  const u = await import('/crypto.js');
+                  const mc = await import('/media-crypto.js');
+                  const cfg = await (await fetch('/api/status')).json();
+                  const main = await u.derive(masterPw, cfg.salt, cfg.iterations);
+                  const st = await (await fetch('/api/media/status', {headers: {Authorization: 'Bearer '+main.token}})).json();
+                  const media = await mc.deriveMedia(mediaPw, st.salt);
+                  const env = await (await fetch('/api/media/vault', {headers: {
+                    Authorization: 'Bearer '+main.token,
+                    'X-Media-Authorization': 'Bearer '+media.token,
+                  }})).json();
+                  const mediaKey = await mc.unwrapMediaKey(media.key, env.wrapIv, env.wrappedKey, env.vaultId);
+                  const raw = await u.decrypt(mediaKey, u.unb64(env.indexCiphertext), env.indexIv, mc.mediaIndexAAD(env.vaultId));
+                  const data = JSON.parse(new TextDecoder().decode(raw));
+                  return data.version === 2 && Array.isArray(data.folders) && data.items.length >= 1;
+                }''',
+                [PASSWORD, MEDIA_PASSWORD],
+            )
+            assert v2_once
+            ok('Media 1.2.0 v1 index migration to root and single v2 normalize on save')
+            open_media_unlocked(page)
+            page.once('dialog', lambda d: d.accept('E2E Album'))
+            page.get_by_role('button', name='New folder', exact=True).click()
+            expect(page.locator('#message')).to_contain_text('Folder created', timeout=30_000)
+            expect(page.locator('.media-folder-card').filter(has_text='E2E Album')).to_have_count(1, timeout=10_000)
+            page.locator('.media-folder-card').filter(has_text='E2E Album').get_by_role('button', name='Open', exact=True).click()
+            upload = page.locator('#media-workspace input[type="file"][accept*="image"]')
+            upload.set_input_files([str(jpeg)])
+            expect(page.locator('.media-card').filter(has_text='e2e-media-upload.jpg')).to_have_count(1, timeout=180_000)
+            page.locator('.media-card').filter(has_text='e2e-media-upload.jpg').locator('input.media-select').check()
+            page.once('dialog', lambda d: d.accept(''))  # move to root
+            page.locator('#media-move-selected').click()
+            expect(page.locator('#media-grid .media-card').filter(has_text='e2e-media-upload.jpg')).to_have_count(0, timeout=30_000)
+            page.locator('#media-breadcrumb button.media-crumb').first.click()
+            expect(page.locator('.media-card').filter(has_text='e2e-media-upload.jpg')).to_have_count(1, timeout=30_000)
+            page.locator('.media-folder-card').filter(has_text='E2E Album').get_by_role('button', name='Open', exact=True).click()
+            ok('Media 1.2.0 folder create and move selected to root')
+            expect(page.locator('#media-breadcrumb')).to_contain_text('E2E Album', timeout=10_000)
+            nested_root = tmp / 'e2e-nested-dir'
+            album = nested_root / 'NestedAlbum' / 'sub'
+            album.mkdir(parents=True)
+            shutil.copy(jpeg, album / 'nested-photo.jpg')
+            (album / 'notes.txt').write_text('skip non-media')
+            jpeg_bytes = (album / 'nested-photo.jpg').read_bytes()
+            page.evaluate(
+                '''async ([jpegB64]) => {
+                  const input = document.querySelector('#media-workspace input[webkitdirectory]');
+                  if (!input) throw new Error('folder input missing');
+                  const bin = Uint8Array.from(atob(jpegB64), c => c.charCodeAt(0));
+                  const media = new File([bin], 'nested-photo.jpg', {type: 'image/jpeg'});
+                  Object.defineProperty(media, 'webkitRelativePath', {value: 'NestedAlbum/sub/nested-photo.jpg'});
+                  const skip = new File(['skip non-media'], 'notes.txt', {type: 'text/plain'});
+                  Object.defineProperty(skip, 'webkitRelativePath', {value: 'NestedAlbum/sub/notes.txt'});
+                  const dt = new DataTransfer();
+                  dt.items.add(media);
+                  dt.items.add(skip);
+                  input.files = dt.files;
+                  input.dispatchEvent(new Event('change', {bubbles: true}));
+                }''',
+                [base64.b64encode(jpeg_bytes).decode()],
+            )
+            nested_album = page.locator('.media-folder-card', has=page.get_by_text('NestedAlbum', exact=True))
+            expect(nested_album).to_have_count(1, timeout=180_000)
+            nested_album.get_by_role('button', name='Open', exact=True).click()
+            sub = page.locator('.media-folder-card', has=page.get_by_text('sub', exact=True))
+            if sub.count() > 0:
+                sub.get_by_role('button', name='Open', exact=True).click()
+            expect(page.locator('.media-card').filter(has_text='nested-photo.jpg')).to_have_count(1, timeout=180_000)
+            ok('Media 1.2.0 nested directory upload (webkitdirectory)')
+            slide2 = tmp / 'e2e-slide-2.jpg'
+            shutil.copy(jpeg, slide2)
+            upload.set_input_files([str(slide2)])
+            expect(page.locator('.media-card').filter(has_text='e2e-slide-2.jpg')).to_have_count(1, timeout=180_000)
+            media_cards = page.locator('.media-card:not(.media-folder-card)')
+            expect(media_cards).to_have_count(2, timeout=30_000)
+            media_cards.filter(has_text='nested-photo.jpg').get_by_role('button', name='View', exact=True).click()
+            expect(page.locator('#media-lightbox')).to_be_visible(timeout=10_000)
+            page.wait_for_function(
+                '''() => {
+                  const img = document.querySelector('#media-lightbox img.media-full');
+                  return img && img.complete && img.naturalWidth > 0;
+                }''',
+                timeout=30_000,
+            )
+            page.locator('#media-lightbox button[data-action="next"]').click()
+            expect(page.locator('#media-lightbox .media-lightbox-title')).to_contain_text('2 / 2', timeout=10_000)
+            page.locator('#media-lightbox button[data-action="zoom-in"]').click()
+            page.locator('#media-lightbox button[data-action="prev"]').click()
+            expect(page.locator('#media-lightbox .media-lightbox-title')).to_contain_text('1 / 2', timeout=10_000)
+            page.locator('#media-lightbox button[data-action="prev"]').click()
+            expect(page.locator('#media-lightbox .media-lightbox-title')).to_contain_text('2 / 2', timeout=10_000)
+            img_ok = page.evaluate('''() => {
+              const img = document.querySelector('#media-lightbox img.media-full');
+              return img && img.complete && img.naturalWidth > 0;
+            }''')
+            assert img_ok
+            page.locator('#media-lightbox button[data-action="next"]').click()
+            expect(page.locator('#media-lightbox .media-lightbox-title')).to_contain_text('1 / 2', timeout=10_000)
+            img_loop = page.evaluate('''() => {
+              const img = document.querySelector('#media-lightbox img.media-full');
+              return img && img.complete && img.naturalWidth > 0;
+            }''')
+            assert img_loop
+            page.locator('#media-lightbox').get_by_role('button', name='Close', exact=True).click()
+            ok('Media 1.2.0 lightbox navigation, zoom, and loop image render')
+            media_cards.filter(has_text='nested-photo.jpg').get_by_role('button', name='View', exact=True).click()
+            page.locator('#media-lightbox button[data-slideshow="1000"]').click()
+            page.wait_for_function(
+                '''() => (document.querySelector('.media-lightbox-title')?.textContent || '').includes('2 / 2')''',
+                timeout=15_000,
+            )
+            page.wait_for_function(
+                '''() => (document.querySelector('.media-lightbox-title')?.textContent || '').includes('1 / 2')''',
+                timeout=15_000,
+            )
+            page.wait_for_function(
+                '''() => (document.querySelector('.media-lightbox-title')?.textContent || '').includes('2 / 2')''',
+                timeout=15_000,
+            )
+            page.wait_for_function(
+                '''() => (document.querySelector('.media-lightbox-title')?.textContent || '').includes('1 / 2')''',
+                timeout=15_000,
+            )
+            page.locator('#media-lightbox').get_by_role('button', name='Close', exact=True).click()
+            ok('Media 1.2.0 slideshow auto-advances including loop')
+            with page.expect_download(timeout=120_000) as dl_info:
+                page.get_by_role('button', name='Export Photos & Videos', exact=True).click()
+            export_path = tmp / 'e2e-v120.lvmedia'
+            dl_info.value.save_as(export_path)
+            assert export_path.is_file() and export_path.stat().st_size > 1000
+            import_in = page.locator('#media-workspace input[accept=".lvmedia"]')
+            page.evaluate('(pw) => { window.prompt = () => pw; }', MEDIA_PASSWORD)
+            import_in.set_input_files(str(export_path))
+            expect(page.locator('#message')).to_contain_text('Imported', timeout=180_000)
+            page.locator('#media-breadcrumb button.media-crumb').first.click()
+            e2e_albums = page.locator('.media-folder-card', has=page.get_by_text('E2E Album', exact=True))
+            expect(e2e_albums).to_have_count(2, timeout=180_000)
+            e2e_albums.last.get_by_role('button', name='Open', exact=True).click()
+            nested_albums = page.locator('.media-folder-card', has=page.get_by_text('NestedAlbum', exact=True))
+            expect(nested_albums).to_have_count(1, timeout=60_000)
+            nested_albums.first.get_by_role('button', name='Open', exact=True).click()
+            expect(page.locator('.media-folder-card').filter(has_text='sub')).to_have_count(1, timeout=30_000)
+            page.locator('.media-folder-card').filter(has_text='sub').first.get_by_role('button', name='Open', exact=True).click()
+            expect(page.locator('.media-card').filter(has_text='nested-photo.jpg')).to_have_count(1, timeout=180_000)
+            ok('Media 1.2.0 .lvmedia export/import preserves folders')
+        finally:
+            browser.close()
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
 
 
 def run_production_media_upload_matrix(p, tmp: Path, crt: Path, key: Path):
@@ -345,6 +592,7 @@ def main():
             ok('HTTP landing redirects to HTTPS vault; CA install page on /ca')
             with sync_playwright() as p:
                 run_production_media_upload_matrix(p, tmp, tmp / 'test.crt', tmp / 'test.key')
+                run_media_v120_features(p, tmp, tmp / 'test.crt', tmp / 'test.key')
                 browser = p.chromium.launch(headless=True)
                 context = browser.new_context(ignore_https_errors=True, accept_downloads=True)
                 context.add_init_script('delete window.showSaveFilePicker;')

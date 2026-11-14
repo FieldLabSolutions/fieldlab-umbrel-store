@@ -37,6 +37,7 @@ ID = re.compile(r'^[0-9a-f-]{36}$')
 # Top-level document navigations from the HTTP landing page (different port) use cross-site fetches.
 NAV_STATIC_PATHS = frozenset({
     '/', '/index.html', '/app.js', '/crypto.js', '/media-crypto.js', '/media.js',
+    '/media-index.js', '/media-lightbox.js',
     '/media-sw.js', '/style.css',
     '/favicon.ico', '/favicon-32x32.png', '/apple-touch-icon.png', '/ca',
 })
@@ -506,6 +507,8 @@ class Handler(BaseHTTPRequestHandler):
                 '/crypto.js': ('crypto.js', 'text/javascript'),
                 '/media-crypto.js': ('media-crypto.js', 'text/javascript'),
                 '/media.js': ('media.js', 'text/javascript'),
+                '/media-index.js': ('media-index.js', 'text/javascript'),
+                '/media-lightbox.js': ('media-lightbox.js', 'text/javascript'),
                 '/media-sw.js': ('media-sw.js', 'text/javascript'),
                 '/bip39.js': ('bip39.js', 'text/javascript'),
                 '/bip39-data.js': ('bip39-data.js', 'text/javascript'),
