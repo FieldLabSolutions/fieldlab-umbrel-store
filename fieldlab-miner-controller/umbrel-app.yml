@@ -4,7 +4,7 @@ name: Miner Controller 3000
 tagline: Weather-driven heat controller for the home miners (Avalon Qs + BitAxe)
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-miner-controller/icon.png
 category: bitcoin
-version: "1.5.17"
+version: "1.5.18"
 port: 8742
 description: >-
   Private LAN controller for home Avalon Q miners and BitAxes.
@@ -20,6 +20,10 @@ repo: ""
 support: ""
 gallery: []
 releaseNotes: >-
+  1.5.18: Block Party settings now show the full Rigly payout address and the full worker name
+  in plain text, with a copy button. The prefix is never shortened. If no payout address is set,
+  the card says so plainly.
+
   1.5.17: Alerts and saved status now follow a miner when its IP changes, are removed with removed miners, and leftovers are cleaned up at startup.
 
   1.5.16: Edit on built-in miners now edits in place instead of adding a duplicate card; Add refuses duplicates.
