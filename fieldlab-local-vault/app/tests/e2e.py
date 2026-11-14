@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Repeatable browser integration tests; synthetic content only, isolated temp data."""
+import sys
 import base64
 import hashlib
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 import ssl
 import subprocess
@@ -16,6 +18,7 @@ import urllib.error
 from playwright.sync_api import sync_playwright, expect
 
 ROOT = Path(__file__).resolve().parents[1]  # fieldlab-local-vault/app
+sys.path.insert(0, str(ROOT))
 BIP39_WORDLIST_SHA256 = '2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda'
 PASSWORD = 'synthetic test passphrase only 2026'
 MEDIA_PASSWORD = 'separate media vault password 2026'
@@ -35,11 +38,16 @@ def request(origin, path, method='GET', body=None, headers=None):
         return e.code, e.read()
 
 def e2e_server_env(extra):
-    """Hermetic media limits for CI/VMs (production defaults stay in server.py)."""
+    """Hermetic e2e: do not require 50 GiB host free on main suite servers."""
+    return {**extra, 'VAULT_MEDIA_MIN_DISK_FREE_BYTES': '0'}
+
+
+def production_media_server_env(extra):
+    """Explicit production media limits (50 GiB headroom, 100 GiB quota)."""
     return {
         **extra,
-        'VAULT_MEDIA_MIN_DISK_FREE_BYTES': '0',
-        'VAULT_MEDIA_QUOTA_BYTES': str(512 * 1024 * 1024),
+        'VAULT_MEDIA_MIN_DISK_FREE_BYTES': str(50 * 1024 ** 3),
+        'VAULT_MEDIA_QUOTA_BYTES': str(100 * 1024 ** 3),
     }
 
 
@@ -78,6 +86,191 @@ def open_note(page, title_substring=''):
 def open_wallet(page, title_substring=''):
     page.locator('#wallets button').filter(has_text=title_substring).click()
 
+def make_media_upload_fixtures(tmp: Path):
+    if not shutil.which('ffmpeg'):
+        raise RuntimeError('ffmpeg not found; required for media upload e2e fixtures')
+    jpeg = tmp / 'e2e-media-upload.jpg'
+    mp4 = tmp / 'e2e-media-upload.mp4'
+    subprocess.run(
+        ['ffmpeg', '-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=1280x720',
+         '-frames:v', '1', '-q:v', '2', str(jpeg)],
+        check=True,
+    )
+    subprocess.run(
+        ['ffmpeg', '-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=10',
+         '-t', '0.8', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(mp4)],
+        check=True,
+    )
+    return jpeg, mp4
+
+
+def accept_media_password(dialog):
+    dialog.accept(MEDIA_PASSWORD)
+
+
+def open_media_unlocked(page):
+    page.once('dialog', accept_media_password)
+    page.locator('#open-media').click()
+    expect(page.locator('#media-workspace')).to_be_visible(timeout=60_000)
+    expect(page.locator('#media-workspace')).to_contain_text('Photos & Videos', timeout=10_000)
+
+
+def run_media_browser_upload(page, tmp: Path, data_dir: Path, tag: str, prod_disk_check=False):
+    jpeg, mp4 = make_media_upload_fixtures(tmp)
+    open_media_unlocked(page)
+    page.evaluate('''() => {
+      const input = document.querySelector('#media-workspace input[type="file"][accept*="image"]');
+      if (!input) throw new Error('upload input missing');
+      input.addEventListener('change', () => {
+        Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        setTimeout(() => {
+          Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+          document.dispatchEvent(new Event('visibilitychange'));
+        }, 150);
+      }, { once: true });
+    }''')
+    upload = page.locator('#media-workspace input[type="file"][accept*="image"]')
+    upload.set_input_files([str(jpeg), str(mp4)])
+    expect(page.locator('#media-grid .media-card')).to_have_count(2, timeout=180_000)
+    expect(page.locator('#media-grid img.media-thumb[src^="blob:"]')).to_have_count(2, timeout=30_000)
+    media_root = data_dir / 'media'
+    state = json.loads((media_root / 'state.json').read_text())
+    assert state.get('usedBytes', 0) > 0, 'usedBytes should reflect uploads'
+    blob_bins = list((media_root / 'blobs').rglob('*.bin'))
+    assert len(blob_bins) >= 2, 'expected ciphertext chunk blobs on disk'
+    page.locator('.media-card').filter(has_text='e2e-media-upload.jpg').get_by_role('button', name='View', exact=True).click()
+    expect(page.locator('img.media-full')).to_be_visible(timeout=30_000)
+    page.locator('.media-viewer button').filter(has_text='Close').click()
+    page.locator('.media-card').filter(has_text='e2e-media-upload.mp4').get_by_role('button', name='Play', exact=True).click()
+    expect(page.locator('video.media-full')).to_be_visible(timeout=30_000)
+    page.evaluate('''async () => {
+      const v = document.querySelector('video.media-full');
+      if (!v) throw new Error('no video');
+      await new Promise((res, rej) => {
+        const t = setTimeout(() => rej(new Error('video metadata timeout')), 30000);
+        const done = () => { clearTimeout(t); res(); };
+        if (v.readyState >= 2) return done();
+        v.onloadeddata = done;
+        v.onerror = () => done();
+        v.load();
+      });
+      try { await v.play(); } catch (_) { /* headless codec may block play(); metadata load is enough */ }
+    }''')
+    page.locator('.media-viewer button').filter(has_text='Close').click()
+    page.reload()
+    unlock(page)
+    open_media_unlocked(page)
+    expect(page.locator('#media-grid .media-card')).to_have_count(2, timeout=60_000)
+    ok(f'Media upload with visibility toggle ({tag}): disk, grid, reload, image and SW video')
+
+
+def make_thumbnail_stress_fixtures(tmp: Path):
+    """Corrupt / unsupported previews must not block later uploads (makeThumbnail hang regression)."""
+    bad_mp4 = tmp / 'e2e-bad-video.mp4'
+    bad_mp4.write_bytes(b'\x00\x00\x00\x20ftyp' + b'\x00' * 2000)
+    corrupt_jpg = tmp / 'e2e-corrupt.jpg'
+    corrupt_jpg.write_bytes(b'not-a-jpeg-at-all')
+    heic = tmp / 'e2e-fake.heic'
+    heic.write_bytes(b'\x00' * 64)
+    good_jpeg = tmp / 'e2e-after-bad.jpg'
+    subprocess.run(
+        ['ffmpeg', '-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=green:s=640x480',
+         '-frames:v', '1', '-q:v', '2', str(good_jpeg)],
+        check=True,
+    )
+    return bad_mp4, corrupt_jpg, heic, good_jpeg
+
+
+def run_media_bad_preview_then_good_upload(page, tmp: Path, data_dir: Path):
+    """Does not assert total grid size — media_roundtrip may already have items on data18449."""
+    bad_mp4, corrupt_jpg, heic, good_jpeg = make_thumbnail_stress_fixtures(tmp)
+    open_media_unlocked(page)
+    page.locator('#media-idle').select_option('5')
+    upload = page.locator('#media-workspace input[type="file"][accept*="image"]')
+    upload.set_input_files([str(bad_mp4), str(corrupt_jpg), str(heic), str(good_jpeg)])
+    for name in ('e2e-bad-video.mp4', 'e2e-corrupt.jpg', 'e2e-fake.heic', 'e2e-after-bad.jpg'):
+        expect(page.locator('.media-card').filter(has_text=name)).to_have_count(1, timeout=120_000)
+    expect(page.locator('#media-status')).to_contain_text('uploaded', timeout=30_000)
+    state = json.loads((data_dir / 'media' / 'state.json').read_text())
+    assert state.get('usedBytes', 0) > 0
+    ok('Media upload continues after bad video/corrupt image/HEIC previews (no thumbnail hang)')
+
+
+def run_media_upload_while_vault_busy(page, tmp: Path, data_dir: Path):
+    """Regression: media uploads must not be dropped when vault task() busy is true."""
+    jpeg, _ = make_media_upload_fixtures(tmp)
+    page.locator('#new-note').click()
+    page.locator('#note-title').fill('busy-regression-note')
+    page.locator('#note-body').fill('hold-busy')
+
+    def slow_vault_put(route):
+        if route.request.method == 'PUT' and route.request.url.rstrip('/').endswith('/api/vault'):
+            time.sleep(2.5)
+        route.continue_()
+
+    page.route('**/api/vault', slow_vault_put)
+    try:
+        page.get_by_role('button', name='Save note', exact=True).click()
+        open_media_unlocked(page)
+        page.locator('#media-idle').select_option('5')
+        upload = page.locator('#media-workspace input[type="file"][accept*="image"]')
+        upload.set_input_files([str(jpeg)])
+    finally:
+        page.unroute('**/api/vault', slow_vault_put)
+    expect(page.locator('.media-card').filter(has_text='e2e-media-upload.jpg')).to_have_count(1, timeout=180_000)
+    state = json.loads((data_dir / 'media' / 'state.json').read_text())
+    assert state.get('usedBytes', 0) > 0
+    ok('Media upload proceeds while vault save holds vault task busy')
+
+
+def run_production_media_upload_matrix(p, tmp: Path, crt: Path, key: Path):
+    """Chromium, Firefox, and Pixel emulation with production disk/quota limits."""
+    import media_api
+    scenarios = (
+        ('desktop Chromium', 18460, lambda: p.chromium.launch(headless=True), None),
+        ('desktop Firefox', 18461, lambda: p.firefox.launch(headless=True), None),
+        ('Pixel 7', 18462, lambda: p.chromium.launch(headless=True), p.devices['Pixel 7']),
+    )
+    disk_checked = False
+    for label, port, launch, device in scenarios:
+        data_dir = tmp / f'data{port}'
+        origin = f'https://127.0.0.1:{port}'
+        env = production_media_server_env({
+            **os.environ,
+            'VAULT_DATA': str(data_dir),
+            'VAULT_ORIGIN': origin,
+            'VAULT_BIND': '127.0.0.1',
+            'VAULT_PORT': str(port),
+            'VAULT_CERT': str(crt),
+            'VAULT_KEY': str(key),
+        })
+        proc = subprocess.Popen(['python3', str(ROOT / 'server.py')], env=env, stdout=subprocess.DEVNULL)
+        try:
+            wait_ready(origin, proc)
+            if not disk_checked:
+                disk_checked = True
+                if not media_api.disk_ok(data_dir):
+                    free = media_api.disk_free_bytes(data_dir)
+                    _, min_free, _, _ = media_api.media_env_limits(data_dir)
+                    ok(f'SKIP production media matrix: host free {free} < policy min-free {min_free}')
+                    return
+                ok('Production media min-free gate passes on data directory filesystem')
+            browser = launch()
+            try:
+                opts = {**(device or {}), 'ignore_https_errors': True, 'accept_downloads': True}
+                ctx = browser.new_context(**opts)
+                ctx.add_init_script('delete window.showSaveFilePicker;')
+                page = ctx.new_page()
+                create(page, origin)
+                run_media_browser_upload(page, tmp, data_dir, label, prod_disk_check=True)
+            finally:
+                browser.close()
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
+
+
 def fill_valid_test_mnemonic(page):
     words = ['abandon'] * 11 + ['about']
     for i, word in enumerate(words):
@@ -89,7 +282,7 @@ def main():
         subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-keyout',str(tmp/'test.key'),'-out',str(tmp/'test.crt'),'-days','1','-subj','/CN=127.0.0.1','-addext','subjectAltName=IP:127.0.0.1'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         procs = []
         try:
-            for port in (18449,18450):
+            for port in (18449,18450,18451):
                 origin = f'https://127.0.0.1:{port}'
                 env = e2e_server_env({**os.environ, 'VAULT_DATA':str(tmp/f'data{port}'), 'VAULT_ORIGIN':origin, 'VAULT_BIND':'127.0.0.1', 'VAULT_PORT':str(port), 'VAULT_CERT':str(tmp/'test.crt'), 'VAULT_KEY':str(tmp/'test.key')})
                 p = subprocess.Popen(['python3',str(ROOT/'server.py')], env=env, stdout=subprocess.DEVNULL)
@@ -151,6 +344,7 @@ def main():
             assert b'Windows' in ca_body and b'Android' in ca_body
             ok('HTTP landing redirects to HTTPS vault; CA install page on /ca')
             with sync_playwright() as p:
+                run_production_media_upload_matrix(p, tmp, tmp / 'test.crt', tmp / 'test.key')
                 browser = p.chromium.launch(headless=True)
                 context = browser.new_context(ignore_https_errors=True, accept_downloads=True)
                 context.add_init_script('delete window.showSaveFilePicker;')
@@ -475,6 +669,8 @@ def main():
                 unlock(page); open_note(page, 'Unfiled')
                 expect(page.locator('#note-attachments .note-attachment')).to_have_count(2)
                 ok('Vault survives server restart and correct password decrypts persistent state')
+                run_media_bad_preview_then_good_upload(page, tmp, tmp / 'data18449')
+                run_media_upload_while_vault_busy(page, tmp, tmp / 'data18449')
                 page.screenshot(path=str(ROOT/'tests'/'tested-ui.png'),full_page=True)
                 assert not errors, errors
                 ok('No browser runtime errors')

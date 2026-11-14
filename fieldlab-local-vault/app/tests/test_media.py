@@ -5,15 +5,19 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 import urllib.error
 import urllib.request
 import ssl
+from collections import namedtuple
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 
 def request(origin, path, method='GET', body=None, headers=None):
@@ -36,6 +40,28 @@ def wait_ready(origin, proc):
             pass
         time.sleep(0.05)
     raise RuntimeError('timeout')
+
+
+class DiskOkTests(unittest.TestCase):
+    def test_live_box_headroom_passes_production_min_free(self):
+        """Daniel's ~98 GiB free on /home vs 50 GiB policy — arithmetic sanity."""
+        free_98 = 98 * 1024 ** 3
+        min_50 = 50 * 1024 ** 3
+        self.assertGreaterEqual(free_98, min_50)
+
+    def test_disk_ok_live_box_home_numbers_via_mocked_usage(self):
+        """Daniel's box: 98 GiB free of 107 GiB on /home — must pass 50 GiB min-free policy."""
+        import media_api
+        free_98 = 98 * 1024 ** 3
+        total_107 = 107 * 1024 ** 3
+        used = total_107 - free_98
+        usage = namedtuple('usage', ['total', 'used', 'free'])(total_107, used, free_98)
+        with tempfile.TemporaryDirectory(prefix='disk-ok-') as tmp:
+            data = Path(tmp)
+            with patch.dict(os.environ, {'VAULT_MEDIA_MIN_DISK_FREE_BYTES': str(50 * 1024 ** 3)}, clear=False):
+                with patch.object(shutil, 'disk_usage', return_value=usage):
+                    self.assertEqual(media_api.disk_free_bytes(data), free_98)
+                    self.assertTrue(media_api.disk_ok(data))
 
 
 class MediaApiTests(unittest.TestCase):

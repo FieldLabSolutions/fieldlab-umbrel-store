@@ -4,6 +4,10 @@
     "Unauthenticated access, hostile Origin and hostile Host rejected",
     "Cross-site landing-page link may open vault UI; API still blocked cross-site",
     "HTTP landing redirects to HTTPS vault; CA install page on /ca",
+    "Production media min-free gate passes on data directory filesystem",
+    "Media upload with visibility toggle (desktop Chromium): disk, grid, reload, image and SW video",
+    "Media upload with visibility toggle (desktop Firefox): disk, grid, reload, image and SW video",
+    "Media upload with visibility toggle (Pixel 7): disk, grid, reload, image and SW video",
     "First-run password setup and browser WebCrypto in HTTPS",
     "Photos & Videos button in workspace toolbar opens media setup prompt",
     "Create, edit and full-text search notes",
@@ -27,6 +31,7 @@
     "Note deletion cancel/confirm and attachment deletion",
     "Idle auto-lock at selected one-minute interval",
     "Vault survives server restart and correct password decrypts persistent state",
+    "Media upload proceeds while vault save holds vault task busy",
     "No browser runtime errors",
     "Server disk contains no plaintext notes, original filenames or master password"
   ]

@@ -12,6 +12,77 @@ let mediaUrls = new Set();
 let mediaLastActivity = Date.now();
 let mediaViewOpen = false;
 let swReg = null;
+const MEDIA_HIDDEN_LOCK_MS = 60_000;
+let mediaTransferCount = 0;
+let mediaFilePickerOpen = false;
+let mediaHiddenSince = 0;
+let mediaVisibilityTimer = null;
+let mediaStatusEl = null;
+let mediaGlobalMessage = null;
+
+function mediaStatus(line, alsoGlobal = true) {
+  if (mediaStatusEl) {
+    mediaStatusEl.textContent = line;
+    mediaStatusEl.hidden = !line;
+  }
+  if (alsoGlobal && mediaGlobalMessage) mediaGlobalMessage(line);
+}
+
+function mediaTransferBegin() {
+  mediaTransferCount++;
+  touchMediaActivity();
+}
+
+function mediaTransferEnd() {
+  mediaTransferCount = Math.max(0, mediaTransferCount - 1);
+}
+
+function wireFilePickerGuard(input) {
+  if (!input || input.dataset.pickerGuard) return;
+  input.dataset.pickerGuard = '1';
+  input.addEventListener('pointerdown', () => { mediaFilePickerOpen = true; touchMediaActivity(); });
+  input.addEventListener('click', () => { mediaFilePickerOpen = true; touchMediaActivity(); });
+  input.addEventListener('cancel', () => { mediaFilePickerOpen = false; });
+  input.addEventListener('change', () => { setTimeout(() => { mediaFilePickerOpen = false; }, 1000); });
+}
+
+function mediaMayLockFromHidden() {
+  if (!mediaSession || !mediaViewOpen) return;
+  if (mediaTransferCount > 0 || mediaFilePickerOpen) return;
+  if (!document.hidden || !mediaHiddenSince) return;
+  if (Date.now() - mediaHiddenSince < MEDIA_HIDDEN_LOCK_MS) return;
+  lockMedia('Photos & Videos locked — tab was hidden too long. Unlock and try again.');
+}
+
+function onMediaVisibilityChange() {
+  if (!mediaSession) return;
+  if (document.hidden) {
+    if (!mediaHiddenSince) mediaHiddenSince = Date.now();
+    if (!mediaVisibilityTimer) {
+      mediaVisibilityTimer = setInterval(mediaMayLockFromHidden, 2000);
+    }
+  } else {
+    mediaHiddenSince = 0;
+    if (mediaVisibilityTimer) {
+      clearInterval(mediaVisibilityTimer);
+      mediaVisibilityTimer = null;
+    }
+  }
+}
+
+const THUMBNAIL_TIMEOUT_MS = 10_000;
+
+function promiseWithTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}
+
+function isHeicFile(file) {
+  const t = (file.type || '').toLowerCase();
+  return t === 'image/heic' || t === 'image/heif' || /\.hei[cf]$/i.test(file.name);
+}
 
 export function mediaIsUnlocked() {
   return Boolean(mediaSession);
@@ -31,18 +102,28 @@ async function mediaApi(path, options = {}, mainSession, mediaToken = null) {
   const response = await fetch(path, {...options, headers, cache: 'no-store', signal: mainSession.abort.signal});
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
-    throw Error(data.error || `Request failed (${response.status})`);
+    const detail = data.error ? `${data.error}` : 'request failed';
+    throw Error(`${path}: ${detail} (HTTP ${response.status})`);
   }
   return response;
 }
 
-export function lockMedia() {
+export function lockMedia(reason) {
+  const msg = reason || 'Photos & Videos locked.';
+  mediaStatus(msg);
   mediaViewOpen = false;
+  mediaHiddenSince = 0;
+  mediaFilePickerOpen = false;
+  if (mediaVisibilityTimer) {
+    clearInterval(mediaVisibilityTimer);
+    mediaVisibilityTimer = null;
+  }
   const ms = mediaSession;
   mediaSession = null;
   for (const url of mediaUrls) URL.revokeObjectURL(url);
   mediaUrls.clear();
   $('media-workspace')?.remove();
+  mediaStatusEl = null;
   $('media-gate')?.remove();
   if (swReg?.active) swReg.active.postMessage({type: 'vault-media-lock'});
   document.querySelectorAll('.media-thumb, .media-full').forEach(n => n.remove());
@@ -55,7 +136,9 @@ function touchMediaActivity() {
 
 export function checkMediaIdle(mainSession, minutes) {
   if (!mediaSession || !mediaViewOpen) return;
-  if (Date.now() - mediaLastActivity >= minutes * 60000) lockMedia();
+  if (Date.now() - mediaLastActivity >= minutes * 60000) {
+    lockMedia(`Photos & Videos locked automatically after ${minutes} minute(s) of inactivity. Unlock and try again.`);
+  }
 }
 
 function authHeaderPair(mainSession) {
@@ -128,39 +211,62 @@ async function unlockMediaFlow(mainSession, masterDigestB64, onMessage, onBusy) 
 }
 
 async function makeThumbnail(file) {
-  if (file.type.startsWith('image/') && file.type !== 'image/heic' && file.type !== 'image/heif') {
+  if (isHeicFile(file)) return null;
+  const isImage = (file.type || '').startsWith('image/');
+  const isVideo = (file.type || '').startsWith('video/') || /\.(mp4|mov|webm|mkv|m4v)$/i.test(file.name);
+  if (isImage) {
     const url = URL.createObjectURL(file);
     try {
       const img = new Image();
-      img.src = url;
-      await img.decode();
+      await promiseWithTimeout(new Promise((res, rej) => {
+        img.onload = () => res();
+        img.onerror = () => rej(new Error('Image load failed'));
+        img.onabort = () => rej(new Error('Image load aborted'));
+        img.src = url;
+      }), THUMBNAIL_TIMEOUT_MS, 'Thumbnail image load timed out');
       const scale = Math.min(1, 320 / Math.max(img.width, img.height));
       const w = Math.max(1, Math.round(img.width * scale));
       const h = Math.max(1, Math.round(img.height * scale));
       const canvas = document.createElement('canvas');
       canvas.width = w; canvas.height = h;
       canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-      return await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.82));
+      return await promiseWithTimeout(new Promise((res, rej) => {
+        canvas.toBlob(b => (b ? res(b) : rej(new Error('Thumbnail encode failed'))), 'image/jpeg', 0.82);
+      }), THUMBNAIL_TIMEOUT_MS, 'Thumbnail encode timed out');
     } catch {
       return null;
     } finally {
       URL.revokeObjectURL(url);
     }
   }
-  if (file.type.startsWith('video/')) {
+  if (isVideo) {
     const url = URL.createObjectURL(file);
     try {
       const video = document.createElement('video');
-      video.muted = true; video.playsInline = true; video.src = url;
-      await new Promise((res, rej) => { video.onloadeddata = res; video.onerror = rej; });
-      video.currentTime = Math.min(1, video.duration / 4 || 0);
-      await new Promise(res => { video.onseeked = res; });
+      video.muted = true; video.playsInline = true; video.preload = 'metadata';
+      await promiseWithTimeout(new Promise((res, rej) => {
+        video.onloadeddata = () => res();
+        video.onloadedmetadata = () => res();
+        video.onerror = () => rej(new Error('Video load failed'));
+        video.onabort = () => rej(new Error('Video load aborted'));
+        video.src = url;
+      }), THUMBNAIL_TIMEOUT_MS, 'Thumbnail video load timed out');
+      const seekTo = Math.min(1, (video.duration || 0) / 4 || 0);
+      video.currentTime = seekTo;
+      await promiseWithTimeout(new Promise((res, rej) => {
+        const done = () => { clearTimeout(t); res(); };
+        const t = setTimeout(() => rej(new Error('Video seek timed out')), THUMBNAIL_TIMEOUT_MS);
+        video.onseeked = done;
+        video.onerror = () => { clearTimeout(t); rej(new Error('Video seek failed')); };
+      }), THUMBNAIL_TIMEOUT_MS, 'Thumbnail video seek timed out');
       const w = Math.min(320, video.videoWidth || 320);
-      const h = Math.round(w * (video.videoHeight || 180) / (video.videoWidth || 320));
+      const h = Math.max(1, Math.round(w * (video.videoHeight || 180) / (video.videoWidth || 320)));
       const canvas = document.createElement('canvas');
       canvas.width = w; canvas.height = h;
       canvas.getContext('2d').drawImage(video, 0, 0, w, h);
-      return await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.82));
+      return await promiseWithTimeout(new Promise((res, rej) => {
+        canvas.toBlob(b => (b ? res(b) : rej(new Error('Thumbnail encode failed'))), 'image/jpeg', 0.82);
+      }), THUMBNAIL_TIMEOUT_MS, 'Thumbnail encode timed out');
     } catch {
       return null;
     } finally {
@@ -170,7 +276,9 @@ async function makeThumbnail(file) {
   return null;
 }
 
-async function uploadMediaFile(mainSession, file, onMessage, onProgress) {
+async function uploadMediaFile(mainSession, file, onMessage, onProgress, batchLabel = '') {
+  mediaTransferBegin();
+  try {
   if (file.size > MAX_MEDIA_ITEM) throw Error(`${file.name} exceeds 4 GiB.`);
   const status = await (await mediaApi('/api/media/status', {}, mainSession)).json();
   if (!status.uploadAllowed) throw Error('Insufficient disk space on server.');
@@ -178,15 +286,21 @@ async function uploadMediaFile(mainSession, file, onMessage, onProgress) {
   const itemKey = await crypto.subtle.generateKey({name: 'AES-GCM', length: 256}, true, ['encrypt', 'decrypt']);
   const wrapped = await wrapItemKey(mediaSession.mediaKey, itemKey, mainSession.config.vaultId, itemId);
   let thumbIv = null;
-  const thumbBlob = await makeThumbnail(file);
+  const prefix = batchLabel ? `[${batchLabel}] ` : '';
+  onMessage(`${prefix}Preparing preview for ${file.name}…`);
+  let thumbBlob = null;
+  try {
+    thumbBlob = await makeThumbnail(file);
+  } catch (err) {
+    onMessage(`${file.name}: preview skipped (${err.message || 'unavailable'}).`);
+  }
   if (thumbBlob) {
     const tbox = await encryptThumb(itemKey, await thumbBlob.arrayBuffer(), mainSession.config.vaultId, itemId);
     thumbIv = tbox.thumbIv;
     const thumbCipher = new Uint8Array(tbox.ciphertext);
     await mediaApi(`/api/media/items/${itemId}/thumb`, {
       method: 'PUT',
-      body: new Blob([thumbCipher], {type: 'application/octet-stream'}),
-      headers: {'Content-Length': String(thumbCipher.byteLength)},
+      body: thumbCipher,
     }, mainSession);
   }
   const meta = {
@@ -194,19 +308,24 @@ async function uploadMediaFile(mainSession, file, onMessage, onProgress) {
     date: new Date(file.lastModified || Date.now()).toISOString(),
   };
   const mbox = await encryptMeta(itemKey, meta, mainSession.config.vaultId, itemId);
-  const chunks = await encryptFileChunks(itemKey, file, mainSession.config.vaultId, itemId, onProgress);
+  onMessage(`${prefix}Encrypting ${file.name}…`);
+  const chunks = await encryptFileChunks(itemKey, file, mainSession.config.vaultId, itemId, (done, total) => {
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    onMessage(`${prefix}Encrypting ${file.name} (${pct}%)…`);
+    if (onProgress) onProgress(done, total);
+  });
   for (const c of chunks) {
-    onMessage(`Uploading ${file.name} chunk ${c.index + 1}/${chunks.length}…`);
+    onMessage(`${prefix}Uploading chunk ${c.index + 1}/${chunks.length} — ${file.name}…`);
     await mediaApi(`/api/media/items/${itemId}/chunks/${c.index}`, {
       method: 'PUT',
-      body: new Blob([c.bytes], {type: 'application/octet-stream'}),
-      headers: {'Content-Length': String(c.bytes.byteLength)},
+      body: c.bytes,
     }, mainSession);
   }
   await mediaApi(`/api/media/items/${itemId}/commit`, {
     method: 'POST',
     body: JSON.stringify({chunkCount: chunks.length, plaintextSize: file.size}),
   }, mainSession);
+  onMessage(`${prefix}Committed ${file.name}.`);
   const stat = await (await mediaApi('/api/media/status', {}, mainSession)).json();
   mediaSession.envelope.usedBytes = stat.usedBytes;
   mediaSession.index.items.push({
@@ -217,6 +336,9 @@ async function uploadMediaFile(mainSession, file, onMessage, onProgress) {
   });
   await saveMediaIndex(mainSession);
   return itemId;
+  } finally {
+    mediaTransferEnd();
+  }
 }
 
 async function decryptThumbBlob(item, mainSession) {
@@ -282,7 +404,7 @@ function renderMediaWorkspace(mainSession, onMessage, onBusy) {
   title.textContent = 'Photos & Videos';
   const lockBtn = document.createElement('button');
   lockBtn.type = 'button'; lockBtn.textContent = 'Lock media';
-  lockBtn.onclick = () => { lockMedia(); onMessage('Photos & Videos locked.'); };
+  lockBtn.onclick = () => lockMedia('Photos & Videos locked manually.');
   const upload = document.createElement('label');
   upload.className = 'button';
   upload.textContent = 'Add photos or videos';
@@ -299,7 +421,17 @@ function renderMediaWorkspace(mainSession, onMessage, onBusy) {
     const file = importInput.files[0];
     importInput.value = '';
     if (!file) return;
-    onBusy(() => importLvmedia(mainSession, file, onMessage, onBusy));
+    onBusy(async () => {
+      mediaTransferBegin();
+      try {
+        await importLvmedia(mainSession, file, onMessage, onBusy);
+      } catch (err) {
+        onMessage(err.message || 'Import failed.');
+        throw err;
+      } finally {
+        mediaTransferEnd();
+      }
+    });
   });
   const exportBtn = document.createElement('button');
   exportBtn.type = 'button'; exportBtn.textContent = 'Export Photos & Videos';
@@ -319,29 +451,85 @@ function renderMediaWorkspace(mainSession, onMessage, onBusy) {
   idle.className = 'idle-label';
   idle.innerHTML = 'Media auto-lock<select id="media-idle"><option value="1">1 minute</option><option value="2" selected>2 minutes</option><option value="5">5 minutes</option></select>';
   head.append(title, lockBtn, upload, importLbl, exportBtn, idle);
+  const statusLine = document.createElement('p');
+  statusLine.id = 'media-status';
+  statusLine.className = 'media-status muted';
+  statusLine.setAttribute('role', 'status');
+  statusLine.setAttribute('aria-live', 'polite');
+  statusLine.hidden = true;
+  mediaStatusEl = statusLine;
   const progress = document.createElement('progress');
   progress.id = 'media-progress'; progress.hidden = true; progress.max = 100; progress.value = 0;
   const grid = document.createElement('div');
   grid.id = 'media-grid'; grid.className = 'media-grid';
-  ws.append(head, progress, grid);
+  ws.append(head, statusLine, progress, grid);
+  wireFilePickerGuard(input);
+  wireFilePickerGuard(importInput);
+  const report = (line) => {
+    touchMediaActivity();
+    if (mediaStatusEl) {
+      mediaStatusEl.textContent = line;
+      mediaStatusEl.hidden = !line;
+    }
+    onMessage(line);
+  };
   input.addEventListener('change', () => {
     const files = [...input.files];
     input.value = '';
     if (!files.length) return;
+    if (!mediaSession) {
+      const lockedMsg = 'Media locked; unlock Photos & Videos and try again.';
+      report(lockedMsg);
+      return;
+    }
+    const names = files.map(f => f.name).join(', ');
+    report(`Selected ${files.length} file(s): ${names}`);
     onBusy(async () => {
-      progress.hidden = false;
-      for (const file of files) {
-        await uploadMediaFile(mainSession, file, onMessage, (done, total) => {
-          progress.value = Math.round((done / total) * 100);
-        });
+      if (!mediaSession) {
+        report('Media locked; unlock Photos & Videos and try again.');
+        return;
       }
-      progress.hidden = true;
-      onMessage(files.length === 1 ? 'Media uploaded.' : `${files.length} items uploaded.`);
-      paintGrid(mainSession, grid, onMessage, onBusy);
+      progress.hidden = false;
+      let uploaded = 0;
+      const failures = [];
+      const total = files.length;
+      try {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          if (!mediaSession) {
+            report('Media locked; unlock Photos & Videos and try again.');
+            return;
+          }
+          const batchLabel = `${i + 1}/${total}`;
+          try {
+            report(`File ${batchLabel}: encrypting ${file.name}…`);
+            await uploadMediaFile(mainSession, file, report, (done, totalBytes) => {
+              progress.value = totalBytes ? Math.round((done / totalBytes) * 100) : 0;
+            }, batchLabel);
+            uploaded++;
+            if (!mediaSession) throw Error('Vault locked. Operation stopped.');
+            await paintGrid(mainSession, grid, onMessage, onBusy);
+          } catch (err) {
+            const msg = err.message || 'Upload failed.';
+            failures.push(`${file.name}: ${msg}`);
+            report(`Error — ${file.name}: ${msg}`);
+          }
+        }
+      } finally {
+        progress.hidden = true;
+        progress.value = 0;
+      }
+      if (failures.length) {
+        const okPart = uploaded ? `${uploaded} uploaded. ` : '';
+        report(`${okPart}Failed: ${failures.join(' · ')}`);
+      } else {
+        report(uploaded === 1 ? 'All files uploaded and committed.' : `${uploaded} items uploaded and committed.`);
+      }
+      if (uploaded && mediaSession) await paintGrid(mainSession, grid, onMessage, onBusy);
     });
   });
   paintGrid(mainSession, grid, onMessage, onBusy);
-  onMessage('Photos & Videos unlocked.');
+  report('Photos & Videos unlocked.');
 }
 
 async function paintGrid(mainSession, grid, onMessage, onBusy) {
@@ -457,6 +645,7 @@ async function openItem(item, meta, mainSession, onMessage) {
 }
 
 export function wireMedia(mainSession, onMessage, onBusy, masterDigestB64) {
+  mediaGlobalMessage = onMessage;
   initMediaServiceWorker().catch(() => {});
   let btn = $('open-media');
   if (!btn) {
@@ -470,7 +659,8 @@ export function wireMedia(mainSession, onMessage, onBusy, masterDigestB64) {
     }
       await unlockMediaFlow(mainSession, masterDigestB64, onMessage, onBusy);
     }));
-    document.addEventListener('visibilitychange', () => { if (document.hidden) lockMedia(); });
+    window.addEventListener('focus', () => { setTimeout(() => { mediaFilePickerOpen = false; }, 400); });
+    document.addEventListener('visibilitychange', onMediaVisibilityChange);
   }
 }
 
@@ -529,9 +719,7 @@ async function importLvmedia(mainSession, file, onMessage, onBusy) {
       const tbox = await encryptThumb(itemKey, plain, destVault, newId);
       item.thumbIv = tbox.thumbIv;
       const thumbOut = new Uint8Array(tbox.ciphertext);
-      await mediaApi(`/api/media/items/${newId}/thumb`, {
-        method: 'PUT', body: thumbOut, headers: {'Content-Length': String(thumbOut.byteLength)},
-      }, mainSession);
+      await mediaApi(`/api/media/items/${newId}/thumb`, {method: 'PUT', body: thumbOut}, mainSession);
     }
     for (let i = 0; i < item.chunkCount; i++) {
       const pos = byItem.get(`${oldId}:${i}`);
@@ -542,9 +730,7 @@ async function importLvmedia(mainSession, file, onMessage, onBusy) {
       const box = await encryptChunk(itemKey, plain, destVault, newId, i, final);
       const bytes = new Uint8Array(box.ciphertext);
       onMessage(`Importing chunk ${i + 1}/${item.chunkCount}…`);
-      await mediaApi(`/api/media/items/${newId}/chunks/${i}`, {
-        method: 'PUT', body: bytes, headers: {'Content-Length': String(bytes.byteLength)},
-      }, mainSession);
+      await mediaApi(`/api/media/items/${newId}/chunks/${i}`, {method: 'PUT', body: bytes}, mainSession);
       item.chunks[i] = {index: i, iv: box.iv};
     }
     item.id = newId;
