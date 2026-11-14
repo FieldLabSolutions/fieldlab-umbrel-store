@@ -88,11 +88,11 @@ export function findFolderByName(index, parentId, name) {
 }
 
 /** relativePath like Album/sub/file.jpg → folder id for Album/sub (parent of file). */
-export function resolveOrCreateFolderPath(index, relativePath) {
+export function resolveOrCreateFolderPath(index, relativePath, baseParentId = null) {
   const parts = String(relativePath || '').split('/').filter(Boolean);
-  if (parts.length <= 1) return null;
+  if (parts.length <= 1) return baseParentId ?? null;
   const dirParts = parts.slice(0, -1);
-  let parentId = null;
+  let parentId = baseParentId ?? null;
   for (const part of dirParts) {
     let child = findFolderByName(index, parentId, part);
     if (!child) parentId = createFolder(index, part, parentId);

@@ -27,6 +27,7 @@ let mediaGlobalMessage = null;
 let currentFolderId = null;
 let selectedItemIds = new Set();
 const mediaPreloadCache = new Map();
+const mediaGridThumbUrls = new Set();
 
 function mediaStatus(line, alsoGlobal = true) {
   if (mediaStatusEl) {
@@ -130,7 +131,8 @@ export function lockMedia(reason) {
   mediaFilePickerOpen = false;
   currentFolderId = null;
   selectedItemIds.clear();
-  mediaPreloadCache.clear();
+  for (const url of mediaGridThumbUrls) URL.revokeObjectURL(url);
+  mediaGridThumbUrls.clear();
   if (mediaVisibilityTimer) {
     clearInterval(mediaVisibilityTimer);
     mediaVisibilityTimer = null;
@@ -139,6 +141,8 @@ export function lockMedia(reason) {
   mediaSession = null;
   for (const url of mediaUrls) URL.revokeObjectURL(url);
   mediaUrls.clear();
+  for (const url of mediaPreloadCache.values()) URL.revokeObjectURL(url);
+  mediaPreloadCache.clear();
   $('media-workspace')?.remove();
   mediaStatusEl = null;
   $('media-gate')?.remove();
@@ -428,7 +432,7 @@ async function loadLightboxEntry(item, meta, mainSession) {
   const url = URL.createObjectURL(blob);
   mediaUrls.add(url);
   mediaPreloadCache.set(item.id, url);
-  return {kind: 'image', url};
+  return {kind: 'image', url, revoke: false};
 }
 
 function renderBreadcrumb(container, mainSession, grid, onMessage, onBusy) {
@@ -671,7 +675,7 @@ function renderMediaWorkspace(mainSession, onMessage, onBusy) {
         let folderId = currentFolderId;
         const rel = file.webkitRelativePath || file.name;
         if (resolveFolder && file.webkitRelativePath) {
-          folderId = resolveOrCreateFolderPath(mediaSession.index, file.webkitRelativePath);
+          folderId = resolveOrCreateFolderPath(mediaSession.index, file.webkitRelativePath, currentFolderId);
         }
         const batchLabel = `${i + 1}/${total}`;
         try {
@@ -681,7 +685,6 @@ function renderMediaWorkspace(mainSession, onMessage, onBusy) {
           }, batchLabel, folderId);
           uploaded++;
           if (!mediaSession) throw Error('Vault locked. Operation stopped.');
-          await paintGrid(mainSession, grid, onMessage, onBusy);
         } catch (err) {
           const msg = err.message || 'Upload failed.';
           failures.push(`${file.name}: ${msg}`);
@@ -742,10 +745,13 @@ function renderMediaWorkspace(mainSession, onMessage, onBusy) {
     ev.preventDefault();
     dragDepth = 0;
     ws.classList.remove('media-drop-active');
-    const files = [...ev.dataTransfer?.files || []];
-    if (!files.length) return;
-    report(`Dropped ${files.length} file(s).`);
-    onBusy(() => runUploadBatch(files, false));
+    onBusy(async () => {
+      const files = await collectFilesFromDataTransfer(ev.dataTransfer);
+      if (!files.length) return;
+      const hasTree = files.some(f => f.webkitRelativePath && f.webkitRelativePath.includes('/'));
+      report(`Dropped ${files.length} file(s).`);
+      await runUploadBatch(files, hasTree);
+    });
   };
   ws.addEventListener('dragenter', onDragEnter);
   ws.addEventListener('dragleave', onDragLeave);
@@ -757,7 +763,59 @@ function renderMediaWorkspace(mainSession, onMessage, onBusy) {
   report('Photos & Videos unlocked.');
 }
 
+async function collectFilesFromDataTransfer(dt) {
+  const out = [];
+  const items = [...(dt?.items || [])];
+
+  const readDir = (entry, prefix) => new Promise((resolve, reject) => {
+    const reader = entry.createReader();
+    const acc = [];
+    const readBatch = () => {
+      reader.readEntries(batch => {
+        if (!batch.length) {
+          Promise.all(acc.map(e => walk(e, prefix))).then(() => resolve()).catch(reject);
+          return;
+        }
+        acc.push(...batch);
+        readBatch();
+      }, reject);
+    };
+    readBatch();
+  });
+
+  const walk = (entry, prefix) => new Promise((resolve, reject) => {
+    if (entry.isFile) {
+      entry.file(file => {
+        const rel = prefix ? `${prefix}/${file.name}` : file.name;
+        try {
+          Object.defineProperty(file, 'webkitRelativePath', {value: rel, configurable: true});
+        } catch { /* ignore */ }
+        out.push(file);
+        resolve();
+      }, reject);
+    } else if (entry.isDirectory) {
+      const next = prefix ? `${prefix}/${entry.name}` : entry.name;
+      readDir(entry, next).then(resolve).catch(reject);
+    } else resolve();
+  });
+
+  let usedEntries = false;
+  for (const item of items) {
+    const entry = item.webkitGetAsEntry?.();
+    if (entry) {
+      usedEntries = true;
+      await walk(entry, '');
+    }
+  }
+  if (!usedEntries) {
+    for (const file of [...(dt?.files || [])]) out.push(file);
+  }
+  return out;
+}
+
 async function paintGrid(mainSession, grid, onMessage, onBusy) {
+  for (const url of mediaGridThumbUrls) URL.revokeObjectURL(url);
+  mediaGridThumbUrls.clear();
   grid.replaceChildren();
   ensureIndex(mediaSession);
   const moveBtn = $('media-move-selected');
@@ -806,7 +864,7 @@ async function paintGrid(mainSession, grid, onMessage, onBusy) {
     const thumb = await decryptThumbBlob(item, mainSession);
     if (thumb) {
       const url = URL.createObjectURL(thumb);
-      mediaUrls.add(url);
+      mediaGridThumbUrls.add(url);
       img.src = url;
     } else {
       img.alt = 'No preview';

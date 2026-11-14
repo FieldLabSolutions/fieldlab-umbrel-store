@@ -61,12 +61,13 @@ export function openMediaLightbox(ctx) {
     return b;
   };
 
-  const prevBtn = btn('‹', {className: 'media-lightbox-nav prev'});
-  const nextBtn = btn('›', {className: 'media-lightbox-nav next'});
+  const prevBtn = btn('‹', {className: 'media-lightbox-nav prev', 'data-action': 'prev'});
+  const nextBtn = btn('›', {className: 'media-lightbox-nav next', 'data-action': 'next'});
   const closeBtn = btn('Close', {'data-action': 'close'});
   const zoomOut = btn('−', {'data-action': 'zoom-out'});
   const zoomIn = btn('+', {'data-action': 'zoom-in'});
   const zoomReset = btn('Reset zoom', {'data-action': 'zoom-reset'});
+  const ss1 = btn('Slideshow 1s', {'data-slideshow': '1000'});
   const ss3 = btn('Slideshow 3s', {'data-slideshow': '3000'});
   const ss5 = btn('Slideshow 5s', {'data-slideshow': '5000'});
   const ss10 = btn('Slideshow 10s', {'data-slideshow': '10000'});
@@ -74,7 +75,7 @@ export function openMediaLightbox(ctx) {
   const ssResume = btn('Resume', {'data-action': 'slideshow-resume', hidden: true});
 
   viewport.append(prevBtn, mediaSlot, nextBtn);
-  toolbar.append(title, zoomOut, zoomIn, zoomReset, ss3, ss5, ss10, ssPause, ssResume, closeBtn);
+  toolbar.append(title, zoomOut, zoomIn, zoomReset, ss1, ss3, ss5, ss10, ssPause, ssResume, closeBtn);
   stage.append(viewport, toolbar);
   root.append(backdrop, stage);
   document.body.append(root);
@@ -82,10 +83,19 @@ export function openMediaLightbox(ctx) {
   const bumpActivity = () => { if (touchActivity) touchActivity(); };
 
   function clearSlideshow() {
-    if (slideshowTimer) {
-      clearInterval(slideshowTimer);
+    if (slideshowTimer != null) {
+      clearTimeout(slideshowTimer);
       slideshowTimer = null;
     }
+  }
+
+  function scheduleSlideshowTick() {
+    if (!slideshowMs || slideshowPaused) return;
+    clearSlideshow();
+    slideshowTimer = setTimeout(() => {
+      slideshowTimer = null;
+      goNext(true);
+    }, slideshowMs);
   }
 
   function applyTransform(el) {
@@ -107,19 +117,21 @@ export function openMediaLightbox(ctx) {
     if (img) applyTransform(img);
   }
 
-  function showAt(newIndex) {
+  function showAt(newIndex, options = {}) {
     index = (newIndex + entries.length) % entries.length;
-    renderCurrent().catch(() => {});
+    renderCurrent(options).catch(() => {});
     bumpActivity();
   }
 
-  function goNext() {
+  function goNext(fromSlideshow = false) {
     if (entries.length <= 1) return;
+    if (!fromSlideshow) clearSlideshow();
     showAt(index + 1);
   }
 
-  function goPrev() {
+  function goPrev(fromUser = true) {
     if (entries.length <= 1) return;
+    if (fromUser) clearSlideshow();
     showAt(index - 1);
   }
 
@@ -129,16 +141,17 @@ export function openMediaLightbox(ctx) {
     mediaSlot.replaceChildren();
   }
 
-  async function renderCurrent() {
+  async function renderCurrent(options = {}) {
+    const viewIndex = index;
     revokeSlot();
-    clearSlideshow();
     resetZoom();
-    const {item, meta} = entries[index];
-    title.textContent = `${meta.filename} (${index + 1} / ${entries.length})`;
+    const {item, meta} = entries[viewIndex];
+    title.textContent = `${meta.filename} (${viewIndex + 1} / ${entries.length})`;
     prevBtn.hidden = entries.length <= 1;
     nextBtn.hidden = entries.length <= 1;
     bumpActivity();
     const loaded = await loadEntry(item, meta);
+    if (viewIndex !== index) return;
     if (loaded.kind === 'video') {
       const video = document.createElement('video');
       video.controls = true;
@@ -147,7 +160,8 @@ export function openMediaLightbox(ctx) {
       video.src = loaded.src;
       video.addEventListener('timeupdate', bumpActivity);
       video.addEventListener('ended', () => {
-        if (loopFolder || slideshowMs > 0) goNext();
+        if (slideshowMs > 0 && !slideshowPaused) goNext(true);
+        else if (loopFolder && !slideshowMs) goNext(false);
       });
       mediaSlot.append(video);
       video.play().catch(() => {});
@@ -157,7 +171,7 @@ export function openMediaLightbox(ctx) {
       img.alt = meta.filename;
       img.draggable = false;
       img.src = loaded.url;
-      if (loaded.revoke !== false) objectUrls.add(loaded.url);
+      if (loaded.revoke) objectUrls.add(loaded.url);
       let dragging = false;
       let lastX = 0;
       let lastY = 0;
@@ -186,10 +200,11 @@ export function openMediaLightbox(ctx) {
       mediaSlot.append(img);
       applyTransform(img);
     }
-    const neighbors = [index - 1, index + 1].filter(i => i >= 0 && i < entries.length);
+    const neighbors = [viewIndex - 1, viewIndex + 1].filter(i => i >= 0 && i < entries.length);
     for (const ni of neighbors) {
       if (preloadEntry) preloadEntry(entries[ni].item, entries[ni].meta).catch(() => {});
     }
+    scheduleSlideshowTick();
   }
 
   function startSlideshow(ms) {
@@ -197,11 +212,7 @@ export function openMediaLightbox(ctx) {
     slideshowPaused = false;
     ssPause.hidden = false;
     ssResume.hidden = true;
-    clearSlideshow();
-    slideshowTimer = setInterval(() => {
-      if (slideshowPaused) return;
-      goNext();
-    }, ms);
+    scheduleSlideshowTick();
   }
 
   function close() {
@@ -241,16 +252,18 @@ export function openMediaLightbox(ctx) {
   document.addEventListener('keydown', onKey);
   backdrop.onclick = close;
   closeBtn.onclick = close;
-  prevBtn.onclick = goPrev;
-  nextBtn.onclick = goNext;
+  prevBtn.onclick = () => goPrev(true);
+  nextBtn.onclick = () => goNext(false);
   zoomIn.onclick = () => setZoom(zoom + 0.25);
   zoomOut.onclick = () => setZoom(zoom - 0.25);
   zoomReset.onclick = resetZoom;
+  ss1.onclick = () => startSlideshow(1000);
   ss3.onclick = () => startSlideshow(3000);
   ss5.onclick = () => startSlideshow(5000);
   ss10.onclick = () => startSlideshow(10000);
   ssPause.onclick = () => {
     slideshowPaused = true;
+    clearSlideshow();
     ssPause.hidden = true;
     ssResume.hidden = false;
   };
@@ -258,6 +271,7 @@ export function openMediaLightbox(ctx) {
     slideshowPaused = false;
     ssPause.hidden = false;
     ssResume.hidden = true;
+    scheduleSlideshowTick();
   };
 
   renderCurrent().catch(err => {
