@@ -18,10 +18,28 @@ function controls() {
   $('unlock-submit').disabled = busy;
 }
 async function task(fn) {
-  if (busy) return;
+  if (busy) {
+    message('Please wait for the current vault operation to finish.');
+    return;
+  }
   busy = true; controls();
   try { await fn(); } catch (err) { message(err.name === 'AbortError' ? 'Vault locked. Operation stopped.' : (err.message || 'Operation failed.')); }
   finally { busy = false; controls(); }
+}
+let mediaBusy = false;
+async function mediaTask(fn) {
+  if (mediaBusy) {
+    message('A Photos & Videos operation is already running.');
+    return;
+  }
+  mediaBusy = true;
+  try {
+    await fn();
+  } catch (err) {
+    message(err.name === 'AbortError' ? 'Media locked. Operation stopped.' : (err.message || 'Media operation failed.'));
+  } finally {
+    mediaBusy = false;
+  }
 }
 async function api(path, options = {}, s = session) {
   const headers = new Headers(options.headers);
@@ -123,7 +141,7 @@ $('unlock-form').addEventListener('submit', event => {
     s.masterDigest = masterDigest;
     s.index = index; session = s; dirty = false; lastActivity = Date.now();
     $('gate').hidden = true; $('workspace').hidden = false; $('lock').hidden = false;
-    wireMedia(s, message, fn => task(fn), s.masterDigest);
+    wireMedia(s, message, mediaTask, s.masterDigest);
     render();
     if (!setup) message('Unlocked. Auto-lock is on. Export an encrypted backup after changes.');
   });

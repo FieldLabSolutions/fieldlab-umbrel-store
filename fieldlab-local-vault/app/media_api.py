@@ -38,9 +38,14 @@ def media_env_limits(data: Path):
     return quota, min_free, max_item, chunk_max
 
 
+def disk_free_bytes(data: Path) -> int:
+    """Free bytes on the filesystem backing VAULT_DATA (same path the server writes under)."""
+    return shutil.disk_usage(data.resolve()).free
+
+
 def disk_ok(data: Path):
     _, min_free, _, _ = media_env_limits(data)
-    return shutil.disk_usage(data).free >= min_free
+    return disk_free_bytes(data) >= min_free
 
 
 def media_state(data: Path):
@@ -284,7 +289,7 @@ def handle_media_get(handler, data: Path, main_state, path: str, headers, reply_
         with _MEDIA_LOCK:
             ms = media_state(data)
             quota, min_free, max_item, _ = media_env_limits(data)
-            free = shutil.disk_usage(data).free
+            free = disk_free_bytes(data)
             reply_fn(200, {
                 'initialized': bool(ms),
                 'uploadAllowed': disk_ok(data),
@@ -407,6 +412,8 @@ def handle_media_put(handler, data: Path, main_state, path: str, headers, reply_
     m = _THUMB.match(path)
     if m:
         item_id = m.group(1)
+        if not headers.get('Content-Length'):
+            return reply_fn(411, {'error': 'Content-Length required'})
         n = int(headers.get('Content-Length', '-1'))
         if not 16 <= n <= _MAX_THUMB:
             return reply_fn(413, {'error': 'Thumbnail too large'})
@@ -452,6 +459,8 @@ def handle_media_put(handler, data: Path, main_state, path: str, headers, reply_
     item_id, index_s = m.groups()
     index = int(index_s)
     _, _, max_item, chunk_max = media_env_limits(data)
+    if not headers.get('Content-Length'):
+        return reply_fn(411, {'error': 'Content-Length required'})
     n = int(headers.get('Content-Length', '-1'))
     if not 16 <= n <= chunk_max:
         return reply_fn(413, {'error': 'Chunk too large'})

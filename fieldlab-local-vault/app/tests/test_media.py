@@ -38,6 +38,23 @@ def wait_ready(origin, proc):
     raise RuntimeError('timeout')
 
 
+class DiskOkTests(unittest.TestCase):
+    def test_live_box_headroom_passes_production_min_free(self):
+        """Daniel's ~98 GiB free on /home vs 50 GiB policy — arithmetic sanity."""
+        free_98 = 98 * 1024 ** 3
+        min_50 = 50 * 1024 ** 3
+        self.assertGreaterEqual(free_98, min_50)
+
+    def test_disk_ok_on_ci_host_with_production_min_free_env(self):
+        import media_api
+        with tempfile.TemporaryDirectory(prefix='disk-ok-') as tmp:
+            data = Path(tmp)
+            env_min = int(os.environ.get('VAULT_MEDIA_MIN_DISK_FREE_BYTES', str(50 * 1024 ** 3)))
+            free = media_api.disk_free_bytes(data)
+            self.assertGreaterEqual(free, env_min, f'CI host free {free} < default min-free {env_min}')
+            self.assertTrue(media_api.disk_ok(data))
+
+
 class MediaApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
