@@ -462,7 +462,7 @@ export function wireMedia(mainSession, onMessage, onBusy, masterDigestB64) {
   if (!btn) {
     btn = document.createElement('button');
     btn.id = 'open-media'; btn.type = 'button'; btn.textContent = 'Photos & Videos';
-    $('.toolbar')?.prepend(btn);
+    document.querySelector('#workspace .toolbar')?.prepend(btn);
     btn.addEventListener('click', () => onBusy(async () => {
     if (mediaSession) {
       renderMediaWorkspace(mainSession, onMessage, onBusy);

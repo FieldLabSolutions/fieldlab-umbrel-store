@@ -3,7 +3,7 @@ id: fieldlab-local-vault
 category: files
 name: Field Lab Vault
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-local-vault/icon.png
-version: "1.1.0"
+version: "1.1.1"
 tagline: Local-only encrypted notes and files with browser-side WebCrypto
 description: >-
   Personal ciphertext-only vault: AES-256-GCM notes and attachments (up to 128 MiB each),
@@ -29,6 +29,7 @@ path: ""
 defaultUsername: ""
 defaultPassword: ""
 releaseNotes: >-
+  1.1.1: Fix Photos & Videos toolbar button missing after unlock (toolbar query used getElementById).
   1.1.0: Photos & Videos — a second password, chunked AES-256-GCM media (up to 4 GiB per item),
   encrypted thumbnails, grid view, streaming video via Service Worker, separate .lvmedia export,
   and a 2-minute media auto-lock (configurable). Master and media sessions are independent; media
