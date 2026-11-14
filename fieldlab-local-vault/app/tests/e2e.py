@@ -159,6 +159,13 @@ def main():
                 page.on('pageerror', lambda e: errors.append(str(e)))
                 create(page,origin)
                 ok('First-run password setup and browser WebCrypto in HTTPS')
+                expect(page.locator('#open-media')).to_be_visible(timeout=5000)
+                with page.expect_event('dialog', timeout=10000) as media_dialog:
+                    page.locator('#open-media').click()
+                dlg = media_dialog.value
+                assert 'Photos & Videos' in dlg.message
+                dlg.dismiss()
+                ok('Photos & Videos button in workspace toolbar opens media setup prompt')
                 page.locator('#new-note').click()
                 page.locator('#note-title').fill('Node recovery test note')
                 page.locator('#note-body').fill(MARKER)

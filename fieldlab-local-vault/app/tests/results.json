@@ -5,6 +5,7 @@
     "Cross-site landing-page link may open vault UI; API still blocked cross-site",
     "HTTP landing redirects to HTTPS vault; CA install page on /ca",
     "First-run password setup and browser WebCrypto in HTTPS",
+    "Photos & Videos button in workspace toolbar opens media setup prompt",
     "Create, edit and full-text search notes",
     "Note attachments with encrypted label/description and search",
     "BIP39 checksum vectors, 4-letter autofill map, and non-word rejection",
