@@ -3,7 +3,7 @@ id: fieldlab-local-vault
 category: files
 name: Field Lab Vault
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-local-vault/icon.png
-version: "1.1.2"
+version: "1.2.0"
 tagline: Local-only encrypted notes and files with browser-side WebCrypto
 description: >-
   Personal ciphertext-only vault: AES-256-GCM notes and attachments (up to 128 MiB each),
@@ -29,6 +29,10 @@ path: ""
 defaultUsername: ""
 defaultPassword: ""
 releaseNotes: >-
+  1.2.0: Photos & Videos viewer — full-screen lightbox with prev/next, keyboard and swipe navigation,
+  image zoom and pan, inline video, slideshow (3/5/10s), and folder albums (create, rename, move,
+  multi-select, drag-drop and folder upload). Media index v2 with encrypted folder tree; .lvmedia
+  import preserves folders; v1 media vaults migrate on unlock.
   1.1.2: Fix Photos & Videos uploads hanging on thumbnail generation (10s timeouts, upload without preview);
   visible Encrypting 1/N and upload progress. Media task queue + 60s hidden-tab grace. Per-file errors.
   1.1.1: Fix Photos & Videos toolbar button missing after unlock (toolbar query used getElementById).

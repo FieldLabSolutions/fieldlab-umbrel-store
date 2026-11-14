@@ -1,4 +1,5 @@
 import {ITERATIONS, b64, unb64, random, derive, authHash, encrypt, decrypt, utf8} from './crypto.js';
+import {normalizeMediaIndex, MEDIA_INDEX_VERSION} from './media-index.js';
 
 export const CHUNK_PLAIN = 4 * 1024 * 1024;
 export const MAX_MEDIA_ITEM = 4 * 1024 * 1024 * 1024;
@@ -74,9 +75,10 @@ export async function sealMediaIndex(mediaKey, index, vaultId) {
 export async function openMediaIndex(mediaKey, envelope) {
   const raw = await decrypt(mediaKey, unb64(envelope.indexCiphertext), envelope.indexIv, mediaIndexAAD(envelope.vaultId));
   const data = JSON.parse(new TextDecoder().decode(raw));
-  if (data.version !== 1 || !Array.isArray(data.items)) throw Error('Invalid media index');
-  return data;
+  return normalizeMediaIndex(data);
 }
+
+export {MEDIA_INDEX_VERSION, normalizeMediaIndex};
 
 export async function encryptMeta(itemKey, meta, vaultId, itemId) {
   const box = await encrypt(itemKey, utf8.encode(JSON.stringify(meta)), mediaMetaAAD(vaultId, itemId));

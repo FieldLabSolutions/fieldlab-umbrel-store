@@ -1,10 +1,15 @@
 import {
   deriveMedia, generateMediaKey, mediaKeyForSession, wrapMediaKey, unwrapMediaKey, wrapItemKey, unwrapItemKey,
   sealMediaIndex, openMediaIndex, encryptFileChunks, encryptChunk, decryptChunk, encryptMeta, decryptMeta,
-  encryptThumb, decryptThumb,
+  encryptThumb, decryptThumb, MEDIA_INDEX_VERSION,
   CHUNK_PLAIN, MAX_MEDIA_ITEM,
 } from './media-crypto.js';
 import {authHash, b64, random, ITERATIONS, utf8} from './crypto.js';
+import {
+  ensureIndex, createFolder, renameFolder, deleteFolder, itemsInFolder, folderChildren, folderBreadcrumb,
+  resolveOrCreateFolderPath, cloneFoldersWithNewIds, moveItemsToFolder,
+} from './media-index.js';
+import {openMediaLightbox} from './media-lightbox.js';
 
 const $ = id => document.getElementById(id);
 let mediaSession = null;
@@ -19,6 +24,9 @@ let mediaHiddenSince = 0;
 let mediaVisibilityTimer = null;
 let mediaStatusEl = null;
 let mediaGlobalMessage = null;
+let currentFolderId = null;
+let selectedItemIds = new Set();
+const mediaPreloadCache = new Map();
 
 function mediaStatus(line, alsoGlobal = true) {
   if (mediaStatusEl) {
@@ -84,6 +92,12 @@ function isHeicFile(file) {
   return t === 'image/heic' || t === 'image/heif' || /\.hei[cf]$/i.test(file.name);
 }
 
+function isMediaFile(file) {
+  const t = (file.type || '').toLowerCase();
+  if (t.startsWith('image/') || t.startsWith('video/')) return true;
+  return /\.(jpe?g|png|gif|webp|bmp|avif|heic|heif|mp4|mov|webm|mkv|m4v)$/i.test(file.name || '');
+}
+
 export function mediaIsUnlocked() {
   return Boolean(mediaSession);
 }
@@ -114,6 +128,9 @@ export function lockMedia(reason) {
   mediaViewOpen = false;
   mediaHiddenSince = 0;
   mediaFilePickerOpen = false;
+  currentFolderId = null;
+  selectedItemIds.clear();
+  mediaPreloadCache.clear();
   if (mediaVisibilityTimer) {
     clearInterval(mediaVisibilityTimer);
     mediaVisibilityTimer = null;
@@ -125,6 +142,7 @@ export function lockMedia(reason) {
   $('media-workspace')?.remove();
   mediaStatusEl = null;
   $('media-gate')?.remove();
+  $('media-lightbox')?.remove();
   if (swReg?.active) swReg.active.postMessage({type: 'vault-media-lock'});
   document.querySelectorAll('.media-thumb, .media-full').forEach(n => n.remove());
   if (ms?.mediaKey) ms.mediaKey = null;
@@ -149,6 +167,7 @@ function authHeaderPair(mainSession) {
 }
 
 async function saveMediaIndex(mainSession) {
+  ensureIndex(mediaSession);
   const box = await sealMediaIndex(mediaSession.mediaKey, mediaSession.index, mediaSession.envelope.vaultId);
   const body = {
     ...mediaSession.envelope,
@@ -181,7 +200,7 @@ async function unlockMediaFlow(mainSession, masterDigestB64, onMessage, onBusy) 
     const mediaKeyWrapping = await generateMediaKey();
     const wrap = await wrapMediaKey(derived.key, mediaKeyWrapping, mainSession.config.vaultId);
     mediaKey = await mediaKeyForSession(mediaKeyWrapping);
-    const index = {version: 1, items: []};
+    const index = {version: MEDIA_INDEX_VERSION, folders: [], items: []};
     const sealed = await sealMediaIndex(mediaKey, index, mainSession.config.vaultId);
     envelope = {
       version: 1, vaultId: mainSession.config.vaultId, salt, iterations: ITERATIONS,
@@ -205,6 +224,7 @@ async function unlockMediaFlow(mainSession, masterDigestB64, onMessage, onBusy) 
       throw Error('Unable to decrypt media index.');
     }
     mediaSession = {token: derived.token, mediaKey, envelope, index, kek: derived.key};
+    ensureIndex(mediaSession);
   }
   touchMediaActivity();
   renderMediaWorkspace(mainSession, onMessage, onBusy);
@@ -276,7 +296,7 @@ async function makeThumbnail(file) {
   return null;
 }
 
-async function uploadMediaFile(mainSession, file, onMessage, onProgress, batchLabel = '') {
+async function uploadMediaFile(mainSession, file, onMessage, onProgress, batchLabel = '', folderId = null) {
   mediaTransferBegin();
   try {
   if (file.size > MAX_MEDIA_ITEM) throw Error(`${file.name} exceeds 4 GiB.`);
@@ -328,10 +348,12 @@ async function uploadMediaFile(mainSession, file, onMessage, onProgress, batchLa
   onMessage(`${prefix}Committed ${file.name}.`);
   const stat = await (await mediaApi('/api/media/status', {}, mainSession)).json();
   mediaSession.envelope.usedBytes = stat.usedBytes;
+  const targetFolder = folderId ?? currentFolderId ?? null;
   mediaSession.index.items.push({
     id: itemId, chunkCount: chunks.length, plaintextSize: file.size,
     wrappedKey: wrapped, metaIv: mbox.metaIv, metaCiphertext: mbox.metaCiphertext,
     chunks: chunks.map(c => ({index: c.index, iv: c.iv})),
+    folderId: targetFolder,
     ...(thumbIv ? {thumbIv} : {}),
   });
   await saveMediaIndex(mainSession);
@@ -388,6 +410,72 @@ async function pushVideoKeys(mainSession, item, meta, itemKey) {
   });
 }
 
+async function itemMeta(item, mainSession) {
+  const itemKey = await unwrapItemKey(mediaSession.mediaKey, item.wrappedKey, mainSession.config.vaultId, item.id);
+  return decryptMeta(itemKey, item.metaIv, item.metaCiphertext, mainSession.config.vaultId, item.id);
+}
+
+async function loadLightboxEntry(item, meta, mainSession) {
+  if (meta.type.startsWith('video/')) {
+    const itemKey = await unwrapItemKey(mediaSession.mediaKey, item.wrappedKey, mainSession.config.vaultId, item.id);
+    await pushVideoKeys(mainSession, item, meta, itemKey);
+    return {kind: 'video', src: `/__vault-media/${item.id}`};
+  }
+  if (mediaPreloadCache.has(item.id)) {
+    return {kind: 'image', url: mediaPreloadCache.get(item.id), revoke: false};
+  }
+  const blob = await decryptItemToBlob(item, mainSession);
+  const url = URL.createObjectURL(blob);
+  mediaUrls.add(url);
+  mediaPreloadCache.set(item.id, url);
+  return {kind: 'image', url};
+}
+
+function renderBreadcrumb(container, mainSession, grid, onMessage, onBusy) {
+  container.replaceChildren();
+  const rootBtn = document.createElement('button');
+  rootBtn.type = 'button';
+  rootBtn.className = 'media-crumb';
+  rootBtn.textContent = 'All photos';
+  rootBtn.onclick = () => {
+    currentFolderId = null;
+    selectedItemIds.clear();
+    paintGrid(mainSession, grid, onMessage, onBusy);
+  };
+  container.append(rootBtn);
+  for (const folder of folderBreadcrumb(mediaSession.index, currentFolderId)) {
+    container.append(document.createTextNode(' / '));
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'media-crumb';
+    btn.textContent = folder.name;
+    btn.onclick = () => {
+      currentFolderId = folder.id;
+      selectedItemIds.clear();
+      paintGrid(mainSession, grid, onMessage, onBusy);
+    };
+    container.append(btn);
+  }
+}
+
+async function openFolderLightbox(mainSession, startItemId, onMessage) {
+  const folderItems = itemsInFolder(mediaSession.index, currentFolderId);
+  const entries = [];
+  for (const item of folderItems) {
+    const meta = await itemMeta(item, mainSession);
+    entries.push({item, meta});
+  }
+  const startIndex = Math.max(0, entries.findIndex(e => e.item.id === startItemId));
+  openMediaLightbox({
+    entries,
+    startIndex,
+    touchActivity: touchMediaActivity,
+    loadEntry: (item, meta) => loadLightboxEntry(item, meta, mainSession),
+    preloadEntry: (item, meta) => loadLightboxEntry(item, meta, mainSession),
+    onClose: () => onMessage('Closed viewer.'),
+  });
+}
+
 function renderMediaWorkspace(mainSession, onMessage, onBusy) {
   mediaViewOpen = true;
   let ws = $('media-workspace');
@@ -411,6 +499,89 @@ function renderMediaWorkspace(mainSession, onMessage, onBusy) {
   const input = document.createElement('input');
   input.type = 'file'; input.multiple = true; input.accept = 'image/*,video/*'; input.hidden = true;
   upload.append(input);
+  const folderUpload = document.createElement('label');
+  folderUpload.className = 'button';
+  folderUpload.textContent = 'Add folder';
+  const folderInput = document.createElement('input');
+  folderInput.type = 'file'; folderInput.multiple = true; folderInput.webkitdirectory = true; folderInput.hidden = true;
+  folderUpload.append(folderInput);
+  const newFolderBtn = document.createElement('button');
+  newFolderBtn.type = 'button';
+  newFolderBtn.textContent = 'New folder';
+  newFolderBtn.onclick = () => {
+    const name = prompt('Folder name:');
+    if (!name) return;
+    onBusy(async () => {
+      try {
+        createFolder(mediaSession.index, name, currentFolderId);
+        await saveMediaIndex(mainSession);
+        await paintGrid(mainSession, $('media-grid'), onMessage, onBusy);
+        onMessage('Folder created.');
+      } catch (err) {
+        onMessage(err.message || 'Could not create folder.');
+      }
+    });
+  };
+  const renameFolderBtn = document.createElement('button');
+  renameFolderBtn.type = 'button';
+  renameFolderBtn.textContent = 'Rename folder';
+  renameFolderBtn.onclick = () => {
+    if (!currentFolderId) { onMessage('Open a folder to rename.'); return; }
+    const folder = mediaSession.index.folders.find(f => f.id === currentFolderId);
+    const name = prompt('Rename folder:', folder?.name || '');
+    if (!name) return;
+    onBusy(async () => {
+      renameFolder(mediaSession.index, currentFolderId, name);
+      await saveMediaIndex(mainSession);
+      renderBreadcrumb($('media-breadcrumb'), mainSession, $('media-grid'), onMessage, onBusy);
+      await paintGrid(mainSession, $('media-grid'), onMessage, onBusy);
+      onMessage('Folder renamed.');
+    });
+  };
+  const deleteFolderBtn = document.createElement('button');
+  deleteFolderBtn.type = 'button';
+  deleteFolderBtn.textContent = 'Delete folder';
+  deleteFolderBtn.onclick = () => {
+    if (!currentFolderId) { onMessage('Open a folder to delete.'); return; }
+    if (!confirm('Delete this empty folder?')) return;
+    onBusy(async () => {
+      try {
+        deleteFolder(mediaSession.index, currentFolderId);
+        currentFolderId = null;
+        await saveMediaIndex(mainSession);
+        renderBreadcrumb($('media-breadcrumb'), mainSession, $('media-grid'), onMessage, onBusy);
+        await paintGrid(mainSession, $('media-grid'), onMessage, onBusy);
+        onMessage('Folder deleted.');
+      } catch (err) {
+        onMessage(err.message || 'Could not delete folder.');
+      }
+    });
+  };
+  const moveBtn = document.createElement('button');
+  moveBtn.type = 'button';
+  moveBtn.id = 'media-move-selected';
+  moveBtn.textContent = 'Move selected';
+  moveBtn.hidden = true;
+  moveBtn.onclick = () => {
+    if (!selectedItemIds.size) return;
+    const target = prompt('Move into folder name (leave empty for root):', '');
+    if (target === null) return;
+    onBusy(async () => {
+      let targetId = null;
+      if (String(target).trim()) {
+        const existing = mediaSession.index.folders.find(
+          f => f.name === target.trim() && (f.parentId ?? null) === (currentFolderId ?? null),
+        );
+        targetId = existing ? existing.id : createFolder(mediaSession.index, target.trim(), currentFolderId);
+      }
+      moveItemsToFolder(mediaSession.index, [...selectedItemIds], targetId);
+      selectedItemIds.clear();
+      await saveMediaIndex(mainSession);
+      moveBtn.hidden = true;
+      await paintGrid(mainSession, $('media-grid'), onMessage, onBusy);
+      onMessage('Items moved.');
+    });
+  };
   const importLbl = document.createElement('label');
   importLbl.className = 'button';
   importLbl.textContent = 'Import .lvmedia';
@@ -449,8 +620,12 @@ function renderMediaWorkspace(mainSession, onMessage, onBusy) {
   });
   const idle = document.createElement('label');
   idle.className = 'idle-label';
-  idle.innerHTML = 'Media auto-lock<select id="media-idle"><option value="1">1 minute</option><option value="2" selected>2 minutes</option><option value="5">5 minutes</option></select>';
-  head.append(title, lockBtn, upload, importLbl, exportBtn, idle);
+  idle.innerHTML = 'Media auto-lock<select id="media-idle"><option value="1">1 minute</option><option value="2" selected>2 minutes</option><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option></select>';
+  head.append(title, lockBtn, upload, folderUpload, newFolderBtn, renameFolderBtn, deleteFolderBtn, moveBtn, importLbl, exportBtn, idle);
+  const breadcrumb = document.createElement('nav');
+  breadcrumb.id = 'media-breadcrumb';
+  breadcrumb.className = 'media-breadcrumb';
+  breadcrumb.setAttribute('aria-label', 'Media folders');
   const statusLine = document.createElement('p');
   statusLine.id = 'media-status';
   statusLine.className = 'media-status muted';
@@ -462,9 +637,11 @@ function renderMediaWorkspace(mainSession, onMessage, onBusy) {
   progress.id = 'media-progress'; progress.hidden = true; progress.max = 100; progress.value = 0;
   const grid = document.createElement('div');
   grid.id = 'media-grid'; grid.className = 'media-grid';
-  ws.append(head, statusLine, progress, grid);
+  ws.append(head, breadcrumb, statusLine, progress, grid);
   wireFilePickerGuard(input);
+  wireFilePickerGuard(folderInput);
   wireFilePickerGuard(importInput);
+
   const report = (line) => {
     touchMediaActivity();
     if (mediaStatusEl) {
@@ -473,77 +650,160 @@ function renderMediaWorkspace(mainSession, onMessage, onBusy) {
     }
     onMessage(line);
   };
+
+  async function runUploadBatch(files, resolveFolder) {
+    if (!mediaSession) {
+      report('Media locked; unlock Photos & Videos and try again.');
+      return;
+    }
+    progress.hidden = false;
+    let uploaded = 0;
+    const failures = [];
+    const mediaFiles = files.filter(isMediaFile);
+    const total = mediaFiles.length;
+    try {
+      for (let i = 0; i < mediaFiles.length; i++) {
+        const file = mediaFiles[i];
+        if (!mediaSession) {
+          report('Media locked; unlock Photos & Videos and try again.');
+          return;
+        }
+        let folderId = currentFolderId;
+        const rel = file.webkitRelativePath || file.name;
+        if (resolveFolder && file.webkitRelativePath) {
+          folderId = resolveOrCreateFolderPath(mediaSession.index, file.webkitRelativePath);
+        }
+        const batchLabel = `${i + 1}/${total}`;
+        try {
+          report(`File ${batchLabel}: encrypting ${file.name}…`);
+          await uploadMediaFile(mainSession, file, report, (done, totalBytes) => {
+            progress.value = totalBytes ? Math.round((done / totalBytes) * 100) : 0;
+          }, batchLabel, folderId);
+          uploaded++;
+          if (!mediaSession) throw Error('Vault locked. Operation stopped.');
+          await paintGrid(mainSession, grid, onMessage, onBusy);
+        } catch (err) {
+          const msg = err.message || 'Upload failed.';
+          failures.push(`${file.name}: ${msg}`);
+          report(`Error — ${file.name}: ${msg}`);
+        }
+      }
+    } finally {
+      progress.hidden = true;
+      progress.value = 0;
+    }
+    if (failures.length) {
+      const okPart = uploaded ? `${uploaded} uploaded. ` : '';
+      report(`${okPart}Failed: ${failures.join(' · ')}`);
+    } else {
+      report(uploaded === 1 ? 'All files uploaded and committed.' : `${uploaded} items uploaded and committed.`);
+    }
+    if (uploaded && mediaSession) await paintGrid(mainSession, grid, onMessage, onBusy);
+  }
+
   input.addEventListener('change', () => {
     const files = [...input.files];
     input.value = '';
     if (!files.length) return;
     if (!mediaSession) {
-      const lockedMsg = 'Media locked; unlock Photos & Videos and try again.';
-      report(lockedMsg);
+      report('Media locked; unlock Photos & Videos and try again.');
       return;
     }
-    const names = files.map(f => f.name).join(', ');
-    report(`Selected ${files.length} file(s): ${names}`);
-    onBusy(async () => {
-      if (!mediaSession) {
-        report('Media locked; unlock Photos & Videos and try again.');
-        return;
-      }
-      progress.hidden = false;
-      let uploaded = 0;
-      const failures = [];
-      const total = files.length;
-      try {
-        for (let i = 0; i < files.length; i++) {
-          const file = files[i];
-          if (!mediaSession) {
-            report('Media locked; unlock Photos & Videos and try again.');
-            return;
-          }
-          const batchLabel = `${i + 1}/${total}`;
-          try {
-            report(`File ${batchLabel}: encrypting ${file.name}…`);
-            await uploadMediaFile(mainSession, file, report, (done, totalBytes) => {
-              progress.value = totalBytes ? Math.round((done / totalBytes) * 100) : 0;
-            }, batchLabel);
-            uploaded++;
-            if (!mediaSession) throw Error('Vault locked. Operation stopped.');
-            await paintGrid(mainSession, grid, onMessage, onBusy);
-          } catch (err) {
-            const msg = err.message || 'Upload failed.';
-            failures.push(`${file.name}: ${msg}`);
-            report(`Error — ${file.name}: ${msg}`);
-          }
-        }
-      } finally {
-        progress.hidden = true;
-        progress.value = 0;
-      }
-      if (failures.length) {
-        const okPart = uploaded ? `${uploaded} uploaded. ` : '';
-        report(`${okPart}Failed: ${failures.join(' · ')}`);
-      } else {
-        report(uploaded === 1 ? 'All files uploaded and committed.' : `${uploaded} items uploaded and committed.`);
-      }
-      if (uploaded && mediaSession) await paintGrid(mainSession, grid, onMessage, onBusy);
-    });
+    report(`Selected ${files.length} file(s): ${files.map(f => f.name).join(', ')}`);
+    onBusy(() => runUploadBatch(files, false));
   });
+
+  folderInput.addEventListener('change', () => {
+    const files = [...folderInput.files];
+    folderInput.value = '';
+    if (!files.length) return;
+    if (!mediaSession) {
+      report('Media locked; unlock Photos & Videos and try again.');
+      return;
+    }
+    const mediaCount = files.filter(isMediaFile).length;
+    report(`Folder upload: ${mediaCount} media file(s) in ${files.length} total.`);
+    onBusy(() => runUploadBatch(files, true));
+  });
+
+  let dragDepth = 0;
+  const onDragEnter = ev => {
+    ev.preventDefault();
+    dragDepth++;
+    ws.classList.add('media-drop-active');
+  };
+  const onDragLeave = ev => {
+    ev.preventDefault();
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) ws.classList.remove('media-drop-active');
+  };
+  const onDragOver = ev => { ev.preventDefault(); };
+  const onDrop = ev => {
+    ev.preventDefault();
+    dragDepth = 0;
+    ws.classList.remove('media-drop-active');
+    const files = [...ev.dataTransfer?.files || []];
+    if (!files.length) return;
+    report(`Dropped ${files.length} file(s).`);
+    onBusy(() => runUploadBatch(files, false));
+  };
+  ws.addEventListener('dragenter', onDragEnter);
+  ws.addEventListener('dragleave', onDragLeave);
+  ws.addEventListener('dragover', onDragOver);
+  ws.addEventListener('drop', onDrop);
+
+  renderBreadcrumb(breadcrumb, mainSession, grid, onMessage, onBusy);
   paintGrid(mainSession, grid, onMessage, onBusy);
   report('Photos & Videos unlocked.');
 }
 
 async function paintGrid(mainSession, grid, onMessage, onBusy) {
   grid.replaceChildren();
-  for (const item of mediaSession.index.items) {
+  ensureIndex(mediaSession);
+  const moveBtn = $('media-move-selected');
+  if (moveBtn) moveBtn.hidden = selectedItemIds.size === 0;
+
+  for (const folder of folderChildren(mediaSession.index, currentFolderId)) {
+    const card = document.createElement('article');
+    card.className = 'media-card media-folder-card';
+    const icon = document.createElement('div');
+    icon.className = 'media-folder-icon';
+    icon.textContent = '📁';
+    const cap = document.createElement('p');
+    cap.textContent = folder.name;
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.textContent = 'Open';
+    open.onclick = () => {
+      currentFolderId = folder.id;
+      selectedItemIds.clear();
+      paintGrid(mainSession, grid, onMessage, onBusy);
+      renderBreadcrumb($('media-breadcrumb'), mainSession, grid, onMessage, onBusy);
+    };
+    card.append(icon, cap, open);
+    grid.append(card);
+  }
+
+  const folderItems = itemsInFolder(mediaSession.index, currentFolderId);
+  for (const item of folderItems) {
     const card = document.createElement('article');
     card.className = 'media-card';
-    const meta = await decryptMeta(
-      await unwrapItemKey(mediaSession.mediaKey, item.wrappedKey, mainSession.config.vaultId, item.id),
-      item.metaIv, item.metaCiphertext, mainSession.config.vaultId, item.id
-    );
+    if (selectedItemIds.has(item.id)) card.classList.add('media-card-selected');
+    const meta = await itemMeta(item, mainSession);
+    const sel = document.createElement('input');
+    sel.type = 'checkbox';
+    sel.className = 'media-select';
+    sel.checked = selectedItemIds.has(item.id);
+    sel.onchange = () => {
+      if (sel.checked) selectedItemIds.add(item.id);
+      else selectedItemIds.delete(item.id);
+      card.classList.toggle('media-card-selected', sel.checked);
+      const mb = $('media-move-selected');
+      if (mb) mb.hidden = selectedItemIds.size === 0;
+    };
     const img = document.createElement('img');
     img.className = 'media-thumb';
-  const thumb = await decryptThumbBlob(item, mainSession);
+    const thumb = await decryptThumbBlob(item, mainSession);
     if (thumb) {
       const url = URL.createObjectURL(thumb);
       mediaUrls.add(url);
@@ -557,8 +817,9 @@ async function paintGrid(mainSession, grid, onMessage, onBusy) {
     const actions = document.createElement('div');
     actions.className = 'attachment-actions';
     const openBtn = document.createElement('button');
-    openBtn.type = 'button'; openBtn.textContent = meta.type.startsWith('video/') ? 'Play' : 'View';
-    openBtn.onclick = () => onBusy(() => openItem(item, meta, mainSession, onMessage));
+    openBtn.type = 'button';
+    openBtn.textContent = meta.type.startsWith('video/') ? 'Play' : 'View';
+    openBtn.onclick = () => onBusy(() => openFolderLightbox(mainSession, item.id, onMessage));
     const dl = document.createElement('button');
     dl.type = 'button'; dl.textContent = 'Download';
     dl.onclick = () => onBusy(async () => {
@@ -592,56 +853,22 @@ async function paintGrid(mainSession, grid, onMessage, onBusy) {
       onBusy(async () => {
         await mediaApi(`/api/media/items/${item.id}`, {method: 'DELETE'}, mainSession);
         mediaSession.index.items = mediaSession.index.items.filter(x => x.id !== item.id);
+        selectedItemIds.delete(item.id);
         await saveMediaIndex(mainSession);
         paintGrid(mainSession, grid, onMessage, onBusy);
         onMessage('Deleted.');
       });
     };
     actions.append(openBtn, dl, rename, del);
-    card.append(img, cap, actions);
+    card.append(sel, img, cap, actions);
     grid.append(card);
   }
-  if (!mediaSession.index.items.length) {
+  if (!folderItems.length && !folderChildren(mediaSession.index, currentFolderId).length) {
     const empty = document.createElement('p');
     empty.className = 'muted';
-    empty.textContent = 'No photos or videos yet.';
+    empty.textContent = 'No photos or videos in this folder yet.';
     grid.append(empty);
   }
-}
-
-async function openItem(item, meta, mainSession, onMessage) {
-  touchMediaActivity();
-  if (meta.type.startsWith('video/')) {
-    const itemKey = await unwrapItemKey(mediaSession.mediaKey, item.wrappedKey, mainSession.config.vaultId, item.id);
-    await pushVideoKeys(mainSession, item, meta, itemKey);
-    const wrap = document.createElement('div');
-    wrap.className = 'media-viewer';
-    const video = document.createElement('video');
-    video.controls = true; video.className = 'media-full';
-    video.src = `/__vault-media/${item.id}`;
-    video.addEventListener('timeupdate', touchMediaActivity);
-    const close = document.createElement('button');
-    close.textContent = 'Close';
-    close.onclick = () => wrap.remove();
-    wrap.append(video, close);
-    $('media-workspace').append(wrap);
-    video.play().catch(() => {});
-    onMessage('Streaming decrypted video.');
-    return;
-  }
-  onMessage('Decrypting photo…');
-  const blob = await decryptItemToBlob(item, mainSession);
-  const url = URL.createObjectURL(blob);
-  mediaUrls.add(url);
-  const img = document.createElement('img');
-  img.className = 'media-full'; img.src = url;
-  const wrap = document.createElement('div');
-  wrap.className = 'media-viewer';
-  const close = document.createElement('button');
-  close.textContent = 'Close';
-  close.onclick = () => { wrap.remove(); URL.revokeObjectURL(url); mediaUrls.delete(url); };
-  wrap.append(img, close);
-  $('media-workspace').append(wrap);
 }
 
 export function wireMedia(mainSession, onMessage, onBusy, masterDigestB64) {
@@ -702,6 +929,16 @@ async function importLvmedia(mainSession, file, onMessage, onBusy) {
   }
   if (offset !== file.size) throw Error('Truncated .lvmedia archive.');
   const destVault = mainSession.config.vaultId;
+  ensureIndex(mediaSession);
+  if (importedIndex.folders?.length) {
+    const {folders, idMap} = cloneFoldersWithNewIds(importedIndex.folders);
+    mediaSession.index.folders.push(...folders);
+    for (const item of importedIndex.items) {
+      if (item.folderId && idMap[item.folderId]) item.folderId = idMap[item.folderId];
+    }
+  } else {
+    for (const item of importedIndex.items) item.folderId = null;
+  }
   for (const item of importedIndex.items) {
     const oldId = item.id;
     const newId = crypto.randomUUID();
