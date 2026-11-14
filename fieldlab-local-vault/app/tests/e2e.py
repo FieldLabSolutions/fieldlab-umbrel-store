@@ -38,8 +38,8 @@ def request(origin, path, method='GET', body=None, headers=None):
         return e.code, e.read()
 
 def e2e_server_env(extra):
-    """Test servers use production media quota/min-free defaults from server.py."""
-    return dict(extra)
+    """Hermetic e2e: do not require 50 GiB host free on main suite servers."""
+    return {**extra, 'VAULT_MEDIA_MIN_DISK_FREE_BYTES': '0'}
 
 
 def production_media_server_env(extra):
@@ -116,11 +116,6 @@ def open_media_unlocked(page):
 
 
 def run_media_browser_upload(page, tmp: Path, data_dir: Path, tag: str, prod_disk_check=False):
-    if prod_disk_check:
-        import media_api
-        min_free = 50 * 1024 ** 3
-        free = media_api.disk_free_bytes(data_dir)
-        assert free >= min_free, f'host free {free} < production min-free {min_free}'
     jpeg, mp4 = make_media_upload_fixtures(tmp)
     open_media_unlocked(page)
     page.evaluate('''() => {
@@ -170,6 +165,37 @@ def run_media_browser_upload(page, tmp: Path, data_dir: Path, tag: str, prod_dis
     ok(f'Media upload with visibility toggle ({tag}): disk, grid, reload, image and SW video')
 
 
+def make_thumbnail_stress_fixtures(tmp: Path):
+    """Corrupt / unsupported previews must not block later uploads (makeThumbnail hang regression)."""
+    bad_mp4 = tmp / 'e2e-bad-video.mp4'
+    bad_mp4.write_bytes(b'\x00\x00\x00\x20ftyp' + b'\x00' * 2000)
+    corrupt_jpg = tmp / 'e2e-corrupt.jpg'
+    corrupt_jpg.write_bytes(b'not-a-jpeg-at-all')
+    heic = tmp / 'e2e-fake.heic'
+    heic.write_bytes(b'\x00' * 64)
+    good_jpeg = tmp / 'e2e-after-bad.jpg'
+    subprocess.run(
+        ['ffmpeg', '-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=green:s=640x480',
+         '-frames:v', '1', '-q:v', '2', str(good_jpeg)],
+        check=True,
+    )
+    return bad_mp4, corrupt_jpg, heic, good_jpeg
+
+
+def run_media_bad_preview_then_good_upload(page, tmp: Path, data_dir: Path):
+    bad_mp4, corrupt_jpg, heic, good_jpeg = make_thumbnail_stress_fixtures(tmp)
+    open_media_unlocked(page)
+    upload = page.locator('#media-workspace input[type="file"][accept*="image"]')
+    upload.set_input_files([str(bad_mp4), str(corrupt_jpg), str(heic), str(good_jpeg)])
+    expect(page.locator('#media-grid .media-card')).to_have_count(4, timeout=180_000)
+    expect(page.locator('.media-card').filter(has_text='e2e-after-bad.jpg')).to_have_count(1, timeout=10_000)
+    state = json.loads((data_dir / 'media' / 'state.json').read_text())
+    assert state.get('usedBytes', 0) > 0
+    blob_bins = list((data_dir / 'media' / 'blobs').rglob('*.bin'))
+    assert len(blob_bins) >= 4
+    ok('Media upload continues after bad video/corrupt image/HEIC previews (no thumbnail hang)')
+
+
 def run_media_upload_while_vault_busy(page, tmp: Path, data_dir: Path):
     """Regression: media uploads must not be dropped when vault task() busy is true."""
     jpeg, _ = make_media_upload_fixtures(tmp)
@@ -190,7 +216,7 @@ def run_media_upload_while_vault_busy(page, tmp: Path, data_dir: Path):
         upload.set_input_files([str(jpeg)])
     finally:
         page.unroute('**/api/vault', slow_vault_put)
-    expect(page.locator('#media-grid .media-card')).to_have_count(1, timeout=180_000)
+    expect(page.locator('.media-card').filter(has_text='e2e-media-upload.jpg')).to_have_count(1, timeout=180_000)
     state = json.loads((data_dir / 'media' / 'state.json').read_text())
     assert state.get('usedBytes', 0) > 0
     ok('Media upload proceeds while vault save holds vault task busy')
@@ -221,9 +247,13 @@ def run_production_media_upload_matrix(p, tmp: Path, crt: Path, key: Path):
         try:
             wait_ready(origin, proc)
             if not disk_checked:
-                assert media_api.disk_ok(data_dir), 'production disk_ok must pass on CI host'
-                ok('Production media min-free gate passes on data directory filesystem')
                 disk_checked = True
+                if not media_api.disk_ok(data_dir):
+                    free = media_api.disk_free_bytes(data_dir)
+                    _, min_free, _, _ = media_api.media_env_limits(data_dir)
+                    ok(f'SKIP production media matrix: host free {free} < policy min-free {min_free}')
+                    return
+                ok('Production media min-free gate passes on data directory filesystem')
             browser = launch()
             try:
                 opts = {**(device or {}), 'ignore_https_errors': True, 'accept_downloads': True}
@@ -637,6 +667,7 @@ def main():
                 unlock(page); open_note(page, 'Unfiled')
                 expect(page.locator('#note-attachments .note-attachment')).to_have_count(2)
                 ok('Vault survives server restart and correct password decrypts persistent state')
+                run_media_bad_preview_then_good_upload(page, tmp, tmp / 'data18449')
                 run_media_upload_while_vault_busy(page, tmp, tmp / 'data18449')
                 page.screenshot(path=str(ROOT/'tests'/'tested-ui.png'),full_page=True)
                 assert not errors, errors

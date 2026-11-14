@@ -53,7 +53,25 @@ function onMediaVisibilityChange() {
     }
   } else {
     mediaHiddenSince = 0;
+    if (mediaVisibilityTimer) {
+      clearInterval(mediaVisibilityTimer);
+      mediaVisibilityTimer = null;
+    }
   }
+}
+
+const THUMBNAIL_TIMEOUT_MS = 10_000;
+
+function promiseWithTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}
+
+function isHeicFile(file) {
+  const t = (file.type || '').toLowerCase();
+  return t === 'image/heic' || t === 'image/heif' || /\.hei[cf]$/i.test(file.name);
 }
 
 export function mediaIsUnlocked() {
@@ -177,42 +195,62 @@ async function unlockMediaFlow(mainSession, masterDigestB64, onMessage, onBusy) 
 }
 
 async function makeThumbnail(file) {
-  if (file.type.startsWith('image/') && file.type !== 'image/heic' && file.type !== 'image/heif') {
+  if (isHeicFile(file)) return null;
+  const isImage = (file.type || '').startsWith('image/');
+  const isVideo = (file.type || '').startsWith('video/') || /\.(mp4|mov|webm|mkv|m4v)$/i.test(file.name);
+  if (isImage) {
     const url = URL.createObjectURL(file);
     try {
       const img = new Image();
-      await new Promise((res, rej) => {
+      await promiseWithTimeout(new Promise((res, rej) => {
         img.onload = () => res();
         img.onerror = () => rej(new Error('Image load failed'));
+        img.onabort = () => rej(new Error('Image load aborted'));
         img.src = url;
-      });
+      }), THUMBNAIL_TIMEOUT_MS, 'Thumbnail image load timed out');
       const scale = Math.min(1, 320 / Math.max(img.width, img.height));
       const w = Math.max(1, Math.round(img.width * scale));
       const h = Math.max(1, Math.round(img.height * scale));
       const canvas = document.createElement('canvas');
       canvas.width = w; canvas.height = h;
       canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-      return await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.82));
+      return await promiseWithTimeout(new Promise((res, rej) => {
+        canvas.toBlob(b => (b ? res(b) : rej(new Error('Thumbnail encode failed'))), 'image/jpeg', 0.82);
+      }), THUMBNAIL_TIMEOUT_MS, 'Thumbnail encode timed out');
     } catch {
       return null;
     } finally {
       URL.revokeObjectURL(url);
     }
   }
-  if (file.type.startsWith('video/')) {
+  if (isVideo) {
     const url = URL.createObjectURL(file);
     try {
       const video = document.createElement('video');
-      video.muted = true; video.playsInline = true; video.src = url;
-      await new Promise((res, rej) => { video.onloadeddata = res; video.onerror = rej; });
-      video.currentTime = Math.min(1, video.duration / 4 || 0);
-      await new Promise(res => { video.onseeked = res; });
+      video.muted = true; video.playsInline = true; video.preload = 'metadata';
+      await promiseWithTimeout(new Promise((res, rej) => {
+        video.onloadeddata = () => res();
+        video.onloadedmetadata = () => res();
+        video.onerror = () => rej(new Error('Video load failed'));
+        video.onabort = () => rej(new Error('Video load aborted'));
+        video.src = url;
+      }), THUMBNAIL_TIMEOUT_MS, 'Thumbnail video load timed out');
+      const seekTo = Math.min(1, (video.duration || 0) / 4 || 0);
+      video.currentTime = seekTo;
+      await promiseWithTimeout(new Promise((res, rej) => {
+        const done = () => { clearTimeout(t); res(); };
+        const t = setTimeout(() => rej(new Error('Video seek timed out')), THUMBNAIL_TIMEOUT_MS);
+        video.onseeked = done;
+        video.onerror = () => { clearTimeout(t); rej(new Error('Video seek failed')); };
+      }), THUMBNAIL_TIMEOUT_MS, 'Thumbnail video seek timed out');
       const w = Math.min(320, video.videoWidth || 320);
-      const h = Math.round(w * (video.videoHeight || 180) / (video.videoWidth || 320));
+      const h = Math.max(1, Math.round(w * (video.videoHeight || 180) / (video.videoWidth || 320)));
       const canvas = document.createElement('canvas');
       canvas.width = w; canvas.height = h;
       canvas.getContext('2d').drawImage(video, 0, 0, w, h);
-      return await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.82));
+      return await promiseWithTimeout(new Promise((res, rej) => {
+        canvas.toBlob(b => (b ? res(b) : rej(new Error('Thumbnail encode failed'))), 'image/jpeg', 0.82);
+      }), THUMBNAIL_TIMEOUT_MS, 'Thumbnail encode timed out');
     } catch {
       return null;
     } finally {
@@ -222,7 +260,7 @@ async function makeThumbnail(file) {
   return null;
 }
 
-async function uploadMediaFile(mainSession, file, onMessage, onProgress) {
+async function uploadMediaFile(mainSession, file, onMessage, onProgress, batchLabel = '') {
   mediaTransferBegin();
   try {
   if (file.size > MAX_MEDIA_ITEM) throw Error(`${file.name} exceeds 4 GiB.`);
@@ -232,7 +270,14 @@ async function uploadMediaFile(mainSession, file, onMessage, onProgress) {
   const itemKey = await crypto.subtle.generateKey({name: 'AES-GCM', length: 256}, true, ['encrypt', 'decrypt']);
   const wrapped = await wrapItemKey(mediaSession.mediaKey, itemKey, mainSession.config.vaultId, itemId);
   let thumbIv = null;
-  const thumbBlob = await makeThumbnail(file);
+  const prefix = batchLabel ? `${batchLabel} ` : '';
+  onMessage(`${prefix}Preparing preview for ${file.name}…`);
+  let thumbBlob = null;
+  try {
+    thumbBlob = await makeThumbnail(file);
+  } catch (err) {
+    onMessage(`${file.name}: preview skipped (${err.message || 'unavailable'}).`);
+  }
   if (thumbBlob) {
     const tbox = await encryptThumb(itemKey, await thumbBlob.arrayBuffer(), mainSession.config.vaultId, itemId);
     thumbIv = tbox.thumbIv;
@@ -247,9 +292,14 @@ async function uploadMediaFile(mainSession, file, onMessage, onProgress) {
     date: new Date(file.lastModified || Date.now()).toISOString(),
   };
   const mbox = await encryptMeta(itemKey, meta, mainSession.config.vaultId, itemId);
-  const chunks = await encryptFileChunks(itemKey, file, mainSession.config.vaultId, itemId, onProgress);
+  onMessage(`${prefix}Encrypting ${file.name}…`);
+  const chunks = await encryptFileChunks(itemKey, file, mainSession.config.vaultId, itemId, (done, total) => {
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    onMessage(`${prefix}Encrypting ${file.name} (${pct}%)…`);
+    if (onProgress) onProgress(done, total);
+  });
   for (const c of chunks) {
-    onMessage(`Uploading ${file.name} chunk ${c.index + 1}/${chunks.length}…`);
+    onMessage(`${prefix}Uploading ${file.name} (${c.index + 1}/${chunks.length})…`);
     await mediaApi(`/api/media/items/${itemId}/chunks/${c.index}`, {
       method: 'PUT',
       body: c.bytes,
@@ -399,20 +449,29 @@ function renderMediaWorkspace(mainSession, onMessage, onBusy) {
       progress.hidden = false;
       let uploaded = 0;
       const failures = [];
-      for (const file of files) {
-        try {
-          onMessage(`Encrypting and uploading ${file.name}…`);
-          await uploadMediaFile(mainSession, file, onMessage, (done, total) => {
-            progress.value = Math.round((done / total) * 100);
-          });
-          uploaded++;
-          if (!mediaSession) throw Error('Vault locked. Operation stopped.');
-          await paintGrid(mainSession, grid, onMessage, onBusy);
-        } catch (err) {
-          failures.push(`${file.name}: ${err.message || 'Upload failed.'}`);
+      const total = files.length;
+      try {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const batchLabel = `Encrypting ${i + 1}/${total}…`;
+          try {
+            onMessage(`${batchLabel} Starting ${file.name}`);
+            await uploadMediaFile(mainSession, file, onMessage, (done, totalBytes) => {
+              progress.value = totalBytes ? Math.round((done / totalBytes) * 100) : 0;
+            }, batchLabel);
+            uploaded++;
+            if (!mediaSession) throw Error('Vault locked. Operation stopped.');
+            await paintGrid(mainSession, grid, onMessage, onBusy);
+          } catch (err) {
+            const msg = err.message || 'Upload failed.';
+            failures.push(`${file.name}: ${msg}`);
+            onMessage(`${file.name}: ${msg}`);
+          }
         }
+      } finally {
+        progress.hidden = true;
+        progress.value = 0;
       }
-      progress.hidden = true;
       if (failures.length) {
         const okPart = uploaded ? `${uploaded} uploaded. ` : '';
         onMessage(`${okPart}Failed: ${failures.join(' · ')}`);
