@@ -4,7 +4,7 @@ name: Miner Controller 3000
 tagline: Weather-driven heat controller for the home miners (Avalon Qs + BitAxe)
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-miner-controller/icon.png
 category: bitcoin
-version: "1.5.19"
+version: "1.5.20"
 port: 8742
 description: >-
   Private LAN controller for home Avalon Q miners and BitAxes.
@@ -20,6 +20,12 @@ repo: ""
 support: ""
 gallery: []
 releaseNotes: >-
+  1.5.20: Block Party no longer runs every day when left on. Pick which days of the week
+  the window applies (default Saturday only). The quick-look box shows scheduled days and the
+  next party start; day checkboxes are in Edit party settings. Cross-midnight windows still
+  count the early-morning hours after the selected start day. Leave Block Party on all week
+  without flips on non-party days.
+
   1.5.19: The Block Party card now opens with a live status box: party on or off, in or out of
   the window, whether each miner is mining to the party right now, the payout address currently
   on the Avalons' Rigly slot, a Copy button, and when it was last checked. All editing (window,
