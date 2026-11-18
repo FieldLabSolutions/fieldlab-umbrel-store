@@ -37,7 +37,7 @@ ID = re.compile(r'^[0-9a-f-]{36}$')
 # Top-level document navigations from the HTTP landing page (different port) use cross-site fetches.
 NAV_STATIC_PATHS = frozenset({
     '/', '/index.html', '/app.js', '/crypto.js', '/media-crypto.js', '/media.js',
-    '/media-index.js', '/media-lightbox.js',
+    '/media-index.js', '/media-lightbox.js', '/vault-dialogs.js', '/idle-policy.js',
     '/media-sw.js', '/style.css',
     '/favicon.ico', '/favicon-32x32.png', '/apple-touch-icon.png', '/ca',
 })
@@ -201,20 +201,23 @@ def ca_install_page(https_base: str) -> str:
 <h2>CA SHA-256 fingerprint</h2>
 <pre>{ca_fp}</pre>
 <p class="muted">Confirm this fingerprint matches after download if your OS shows one.</p>
-<h2>Windows</h2>
+<h2>Windows (Trusted Root)</h2>
+<p class="muted">Install into <strong>Trusted Root Certification Authorities</strong> (per user is enough for Chrome on your account).</p>
 <ol>
-<li>Double-click the downloaded <code>.crt</code> file (or install via <strong>certmgr.msc</strong>).</li>
-<li>Choose <strong>Local Machine</strong> or <strong>Current User</strong> as prompted.</li>
-<li>Select <strong>Place all certificates in the following store</strong> → <strong>Browse</strong> → <strong>Trusted Root Certification Authorities</strong> → OK.</li>
-<li>Finish the wizard and confirm the fingerprint if Windows asks.</li>
+<li>Download <code>fieldlab-vault-ca.crt</code> using the button above.</li>
+<li><strong>GUI:</strong> press Win+R, run <code>certmgr.msc</code>, expand <strong>Trusted Root Certification Authorities</strong> → <strong>Certificates</strong>, right‑click → <strong>All Tasks</strong> → <strong>Import…</strong>, choose the <code>.crt</code>, finish the wizard, and confirm the SHA‑256 fingerprint if prompted.</li>
+<li><strong>Command line (current user):</strong> in Command Prompt or PowerShell: <code>certutil -user -addstore Root fieldlab-vault-ca.crt</code> (run from the folder containing the file).</li>
+<li><strong>Fully quit and restart Chrome</strong> (close all Chrome windows; end background Chrome in Task Manager if needed). A normal refresh is not enough.</li>
 </ol>
-<h2>Android</h2>
+<h2>Android (CA certificate)</h2>
 <ol>
-<li>Copy the <code>.crt</code> to the device (download link above while on Wi‑Fi, or USB / Files).</li>
-<li><strong>Settings</strong> → <strong>Security</strong> → <strong>Encryption &amp; credentials</strong> (names vary slightly by vendor).</li>
-<li><strong>Install a certificate</strong> → <strong>CA certificate</strong> → pick the file.</li>
+<li>Copy the <code>.crt</code> to the device (download link above on Wi‑Fi, or USB / Files).</li>
+<li><strong>Settings</strong> → <strong>Security</strong> → <strong>Encryption &amp; credentials</strong> (wording varies by vendor).</li>
+<li><strong>Install a certificate</strong> → <strong>CA certificate</strong> → select the file.</li>
 <li>Confirm the install; Android may warn that network traffic can be inspected — this CA is limited to your vault LAN names only.</li>
+<li>Force‑stop and reopen Chrome before testing.</li>
 </ol>
+<p class="muted">After the CA is trusted, Chrome should show a normal padlock for <code>https://&lt;your-umbrel-ip&gt;:8449</code>. Until then, &ldquo;Not secure&rdquo; is expected because the browser does not trust the vault&apos;s local CA yet.</p>
 <p><a href="{https_base}">Back to vault login</a></p>
 <footer>Field Lab Vault {APP_VERSION} · CA is generated on your Umbrel and never leaves this device except when you download it.</footer>
 </body></html>"""
@@ -509,6 +512,8 @@ class Handler(BaseHTTPRequestHandler):
                 '/media.js': ('media.js', 'text/javascript'),
                 '/media-index.js': ('media-index.js', 'text/javascript'),
                 '/media-lightbox.js': ('media-lightbox.js', 'text/javascript'),
+                '/vault-dialogs.js': ('vault-dialogs.js', 'text/javascript'),
+                '/idle-policy.js': ('idle-policy.js', 'text/javascript'),
                 '/media-sw.js': ('media-sw.js', 'text/javascript'),
                 '/bip39.js': ('bip39.js', 'text/javascript'),
                 '/bip39-data.js': ('bip39-data.js', 'text/javascript'),

@@ -104,19 +104,29 @@ def make_media_upload_fixtures(tmp: Path):
     return jpeg, mp4
 
 
-def accept_media_password(dialog):
-    dialog.accept(MEDIA_PASSWORD)
+def submit_vault_prompt(page, value, *, submit=True):
+    expect(page.locator('#vault-prompt-dialog')).to_be_visible(timeout=30_000)
+    if value is not None:
+        page.locator('#vault-prompt-input').fill(value)
+    if submit:
+        page.locator('#vault-prompt-submit').click()
+    else:
+        page.locator('#vault-prompt-cancel').click()
+
+
+def confirm_vault_dialog(page, *, accept=True):
+    expect(page.locator('#vault-confirm-dialog')).to_be_visible(timeout=30_000)
+    if accept:
+        page.locator('#vault-confirm-ok').click()
+    else:
+        page.locator('#vault-confirm-cancel').click()
 
 
 def open_media_unlocked(page):
     if page.locator('#media-workspace').is_visible():
         return
     page.locator('#open-media').click()
-    try:
-        dialog = page.wait_for_event('dialog', timeout=3000)
-        accept_media_password(dialog)
-    except Exception:
-        pass
+    submit_vault_prompt(page, MEDIA_PASSWORD)
     expect(page.locator('#media-workspace')).to_be_visible(timeout=60_000)
     expect(page.locator('#media-workspace')).to_contain_text('Photos & Videos', timeout=10_000)
 
@@ -193,7 +203,6 @@ def run_media_bad_preview_then_good_upload(page, tmp: Path, data_dir: Path):
     """Does not assert total grid size — media_roundtrip may already have items on data18449."""
     bad_mp4, corrupt_jpg, heic, good_jpeg = make_thumbnail_stress_fixtures(tmp)
     open_media_unlocked(page)
-    page.locator('#media-idle').select_option('5')
     upload = page.locator('#media-workspace input[type="file"][accept*="image"]')
     upload.set_input_files([str(bad_mp4), str(corrupt_jpg), str(heic), str(good_jpeg)])
     for name in ('e2e-bad-video.mp4', 'e2e-corrupt.jpg', 'e2e-fake.heic', 'e2e-after-bad.jpg'):
@@ -220,7 +229,6 @@ def run_media_upload_while_vault_busy(page, tmp: Path, data_dir: Path):
     try:
         page.get_by_role('button', name='Save note', exact=True).click()
         open_media_unlocked(page)
-        page.locator('#media-idle').select_option('5')
         upload = page.locator('#media-workspace input[type="file"][accept*="image"]')
         upload.set_input_files([str(jpeg)])
     finally:
@@ -313,8 +321,8 @@ def run_media_v120_features(p, tmp: Path, crt: Path, key: Path):
             unlock(page)
             open_media_unlocked(page)
             expect(page.locator('.media-card').filter(has_text='e2e-v1-seed.jpg')).to_have_count(1, timeout=60_000)
-            page.once('dialog', lambda d: d.accept('Persist v2'))
             page.get_by_role('button', name='New folder', exact=True).click()
+            submit_vault_prompt(page, 'Persist v2')
             page.get_by_role('button', name='Lock media', exact=True).click()
             page.reload()
             unlock(page)
@@ -340,8 +348,8 @@ def run_media_v120_features(p, tmp: Path, crt: Path, key: Path):
             assert v2_once
             ok('Media 1.2.0 v1 index migration to root and single v2 normalize on save')
             open_media_unlocked(page)
-            page.once('dialog', lambda d: d.accept('E2E Album'))
             page.get_by_role('button', name='New folder', exact=True).click()
+            submit_vault_prompt(page, 'E2E Album')
             expect(page.locator('#message')).to_contain_text('Folder created', timeout=30_000)
             expect(page.locator('.media-folder-card').filter(has_text='E2E Album')).to_have_count(1, timeout=10_000)
             page.locator('.media-folder-card').filter(has_text='E2E Album').get_by_role('button', name='Open', exact=True).click()
@@ -349,8 +357,8 @@ def run_media_v120_features(p, tmp: Path, crt: Path, key: Path):
             upload.set_input_files([str(jpeg)])
             expect(page.locator('.media-card').filter(has_text='e2e-media-upload.jpg')).to_have_count(1, timeout=180_000)
             page.locator('.media-card').filter(has_text='e2e-media-upload.jpg').locator('input.media-select').check()
-            page.once('dialog', lambda d: d.accept(''))  # move to root
             page.locator('#media-move-selected').click()
+            submit_vault_prompt(page, '')  # move to root
             expect(page.locator('#media-grid .media-card').filter(has_text='e2e-media-upload.jpg')).to_have_count(0, timeout=30_000)
             page.locator('#media-breadcrumb button.media-crumb').first.click()
             expect(page.locator('.media-card').filter(has_text='e2e-media-upload.jpg')).to_have_count(1, timeout=30_000)
@@ -450,8 +458,8 @@ def run_media_v120_features(p, tmp: Path, crt: Path, key: Path):
             dl_info.value.save_as(export_path)
             assert export_path.is_file() and export_path.stat().st_size > 1000
             import_in = page.locator('#media-workspace input[accept=".lvmedia"]')
-            page.evaluate('(pw) => { window.prompt = () => pw; }', MEDIA_PASSWORD)
             import_in.set_input_files(str(export_path))
+            submit_vault_prompt(page, MEDIA_PASSWORD)
             expect(page.locator('#message')).to_contain_text('Imported', timeout=180_000)
             page.locator('#media-breadcrumb button.media-crumb').first.click()
             e2e_albums = page.locator('.media-folder-card', has=page.get_by_text('E2E Album', exact=True))
@@ -589,6 +597,7 @@ def main():
                 ca_body = r.read()
             assert b'Install the vault CA' in ca_body
             assert b'Windows' in ca_body and b'Android' in ca_body
+            assert b'certutil' in ca_body and b'Fully quit and restart Chrome' in ca_body
             ok('HTTP landing redirects to HTTPS vault; CA install page on /ca')
             with sync_playwright() as p:
                 run_production_media_upload_matrix(p, tmp, tmp / 'test.crt', tmp / 'test.key')
@@ -602,12 +611,11 @@ def main():
                 create(page,origin)
                 ok('First-run password setup and browser WebCrypto in HTTPS')
                 expect(page.locator('#open-media')).to_be_visible(timeout=5000)
-                with page.expect_event('dialog', timeout=10000) as media_dialog:
-                    page.locator('#open-media').click()
-                dlg = media_dialog.value
-                assert 'Photos & Videos' in dlg.message
-                dlg.dismiss()
-                ok('Photos & Videos button in workspace toolbar opens media setup prompt')
+                page.locator('#open-media').click()
+                expect(page.locator('#vault-prompt-dialog')).to_be_visible(timeout=10_000)
+                expect(page.locator('#vault-prompt-title')).to_contain_text('Photos & Videos')
+                submit_vault_prompt(page, None, submit=False)
+                ok('Photos & Videos button opens in-page media password modal')
                 page.locator('#new-note').click()
                 page.locator('#note-title').fill('Node recovery test note')
                 page.locator('#note-body').fill(MARKER)
@@ -889,25 +897,25 @@ def main():
                 expect(other.locator('#note-attachments .note-attachment')).to_have_count(2)
                 ok('Legacy 1.0.x encrypted backup imports with attachments inside notes')
                 open_note(other, 'Node recovery')
-                other.once('dialog',lambda d:d.dismiss())
                 other.get_by_role('button',name='Delete note',exact=True).click()
+                confirm_vault_dialog(other, accept=False)
                 expect(other.locator('#notes button')).to_have_count(2)
-                other.once('dialog',lambda d:d.accept())
                 other.get_by_role('button',name='Delete note',exact=True).click()
+                confirm_vault_dialog(other, accept=True)
                 expect(other.locator('#message')).to_have_text('Note deleted.')
                 expect(other.locator('#notes button')).to_have_count(1)
                 open_note(other, 'Unfiled')
-                other.once('dialog',lambda d:d.accept())
                 other.locator('#note-attachments .note-attachment').first.get_by_role('button',name='Delete',exact=True).click()
+                confirm_vault_dialog(other, accept=True)
                 expect(other.locator('#message')).to_have_text('Attachment deleted.')
                 expect(other.locator('#note-attachments .note-attachment')).to_have_count(1)
                 ok('Note deletion cancel/confirm and attachment deletion')
                 # Advance browser clock rather than weakening production idle policy.
-                other.locator('#idle').select_option('1')
+                other.locator('#idle').select_option('15')
                 other.clock.install()
-                other.clock.fast_forward(61000)
+                other.clock.fast_forward(15 * 60_000 + 2000)
                 expect(other.locator('#workspace')).to_be_hidden()
-                ok('Idle auto-lock at selected one-minute interval')
+                ok('Idle auto-lock after 15 minutes of inactivity (browser clock)')
                 # Restart only our temporary test server, never a real Umbrel app.
                 procs[0].terminate(); procs[0].wait(timeout=10)
                 restarted_env=e2e_server_env({**os.environ,'VAULT_DATA':str(tmp/'data18449'),'VAULT_ORIGIN':origin,'VAULT_BIND':'127.0.0.1','VAULT_PORT':'18449','VAULT_CERT':str(tmp/'test.crt'),'VAULT_KEY':str(tmp/'test.key')})

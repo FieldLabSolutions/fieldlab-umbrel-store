@@ -10,6 +10,8 @@ import {
   resolveOrCreateFolderPath, cloneFoldersWithNewIds, moveItemsToFolder,
 } from './media-index.js';
 import {openMediaLightbox} from './media-lightbox.js';
+import {confirmDialog, promptDialog, promptPasswordDialog} from './vault-dialogs.js';
+import {shouldAutoLock, idleMinutesForExport} from './idle-policy.js';
 
 const $ = id => document.getElementById(id);
 let mediaSession = null;
@@ -17,11 +19,9 @@ let mediaUrls = new Set();
 let mediaLastActivity = Date.now();
 let mediaViewOpen = false;
 let swReg = null;
-const MEDIA_HIDDEN_LOCK_MS = 60_000;
 let mediaTransferCount = 0;
 let mediaFilePickerOpen = false;
-let mediaHiddenSince = 0;
-let mediaVisibilityTimer = null;
+let vaultActivityHook = null;
 let mediaStatusEl = null;
 let mediaGlobalMessage = null;
 let currentFolderId = null;
@@ -55,31 +55,11 @@ function wireFilePickerGuard(input) {
   input.addEventListener('change', () => { setTimeout(() => { mediaFilePickerOpen = false; }, 1000); });
 }
 
-function mediaMayLockFromHidden() {
-  if (!mediaSession || !mediaViewOpen) return;
-  if (mediaTransferCount > 0 || mediaFilePickerOpen) return;
-  if (!document.hidden || !mediaHiddenSince) return;
-  if (Date.now() - mediaHiddenSince < MEDIA_HIDDEN_LOCK_MS) return;
-  lockMedia('Photos & Videos locked — tab was hidden too long. Unlock and try again.');
-}
-
-function onMediaVisibilityChange() {
-  if (!mediaSession) return;
-  if (document.hidden) {
-    if (!mediaHiddenSince) mediaHiddenSince = Date.now();
-    if (!mediaVisibilityTimer) {
-      mediaVisibilityTimer = setInterval(mediaMayLockFromHidden, 2000);
-    }
-  } else {
-    mediaHiddenSince = 0;
-    if (mediaVisibilityTimer) {
-      clearInterval(mediaVisibilityTimer);
-      mediaVisibilityTimer = null;
-    }
-  }
-}
-
 const THUMBNAIL_TIMEOUT_MS = 10_000;
+
+export function registerVaultActivity(fn) {
+  vaultActivityHook = fn;
+}
 
 function promiseWithTimeout(promise, ms, message) {
   return Promise.race([
@@ -127,16 +107,11 @@ export function lockMedia(reason) {
   const msg = reason || 'Photos & Videos locked.';
   mediaStatus(msg);
   mediaViewOpen = false;
-  mediaHiddenSince = 0;
   mediaFilePickerOpen = false;
   currentFolderId = null;
   selectedItemIds.clear();
   for (const url of mediaGridThumbUrls) URL.revokeObjectURL(url);
   mediaGridThumbUrls.clear();
-  if (mediaVisibilityTimer) {
-    clearInterval(mediaVisibilityTimer);
-    mediaVisibilityTimer = null;
-  }
   const ms = mediaSession;
   mediaSession = null;
   for (const url of mediaUrls) URL.revokeObjectURL(url);
@@ -154,13 +129,27 @@ export function lockMedia(reason) {
 
 function touchMediaActivity() {
   mediaLastActivity = Date.now();
+  if (vaultActivityHook) vaultActivityHook();
 }
 
-export function checkMediaIdle(mainSession, minutes) {
+function mediaInactivityBlocksLock() {
+  if (mediaTransferCount > 0 || mediaFilePickerOpen) return true;
+  const video = document.querySelector('#media-lightbox video.media-full');
+  if (video && !video.paused && !video.ended) return true;
+  if (document.querySelector('#media-lightbox') && document.querySelector('[data-slideshow-active="1"]')) return true;
+  return false;
+}
+
+export function checkMediaIdle(mainSession) {
   if (!mediaSession || !mediaViewOpen) return;
-  if (Date.now() - mediaLastActivity >= minutes * 60000) {
-    lockMedia(`Photos & Videos locked automatically after ${minutes} minute(s) of inactivity. Unlock and try again.`);
+  if (mediaInactivityBlocksLock()) {
+    touchMediaActivity();
+    return;
   }
+  if (!shouldAutoLock(mediaLastActivity)) return;
+  const minutes = idleMinutesForExport();
+  const detail = minutes > 0 ? ` after ${minutes} minute(s) of inactivity` : '';
+  lockMedia(`Photos & Videos locked automatically${detail}. Unlock and try again.`);
 }
 
 function authHeaderPair(mainSession) {
@@ -189,46 +178,66 @@ async function masterDigest(password) {
   return b64(await crypto.subtle.digest('SHA-256', utf8.encode(password)));
 }
 
+async function promptMediaPassword({setup, masterDigestB64, wrongHint = false}) {
+  return promptPasswordDialog({
+    title: setup ? 'Create Photos & Videos password' : 'Photos & Videos password',
+    help: wrongHint
+      ? 'Wrong media password.'
+      : (setup ? 'Choose a password different from your master vault password.' : 'Enter the password for this encrypted media area.'),
+    label: 'Photos & Videos password',
+    submitLabel: setup ? 'Create' : 'Unlock',
+    validate: async value => {
+      if (await masterDigest(value) === masterDigestB64) return 'Media password must differ from the master password.';
+      return null;
+    },
+  });
+}
+
 async function unlockMediaFlow(mainSession, masterDigestB64, onMessage, onBusy) {
   const status = await (await mediaApi('/api/media/status', {}, mainSession)).json();
   const setup = !status.initialized;
-  const mediaPassword = prompt(setup ? 'Create a Photos & Videos password (must differ from master):' : 'Photos & Videos password:');
-  if (!mediaPassword) return;
-  if (await masterDigest(mediaPassword) === masterDigestB64) throw Error('Media password must differ from the master password.');
-  onMessage('Deriving media key…');
-  const salt = setup ? b64(random(32)) : status.salt;
-  const derived = await deriveMedia(mediaPassword, salt);
-  let envelope;
-  let mediaKey;
   if (setup) {
-    const mediaKeyWrapping = await generateMediaKey();
-    const wrap = await wrapMediaKey(derived.key, mediaKeyWrapping, mainSession.config.vaultId);
-    mediaKey = await mediaKeyForSession(mediaKeyWrapping);
-    const index = {version: MEDIA_INDEX_VERSION, folders: [], items: []};
-    const sealed = await sealMediaIndex(mediaKey, index, mainSession.config.vaultId);
-    envelope = {
-      version: 1, vaultId: mainSession.config.vaultId, salt, iterations: ITERATIONS,
-      wrapIv: wrap.wrapIv, wrappedKey: wrap.wrappedKey, revision: 1,
-      indexIv: sealed.indexIv, indexCiphertext: sealed.indexCiphertext, usedBytes: 0,
-      authHash: await authHash(derived.token),
-    };
-    await mediaApi('/api/media/setup', {method: 'POST', body: JSON.stringify(envelope)}, mainSession, derived.token);
-    mediaSession = {token: derived.token, mediaKey, envelope, index, kek: derived.key};
+    let derived;
+    while (true) {
+      const mediaPassword = await promptMediaPassword({setup: true, masterDigestB64});
+      if (mediaPassword === null) return;
+      onMessage('Deriving media key…');
+      const salt = b64(random(32));
+      derived = await deriveMedia(mediaPassword, salt);
+      const mediaKeyWrapping = await generateMediaKey();
+      const wrap = await wrapMediaKey(derived.key, mediaKeyWrapping, mainSession.config.vaultId);
+      const mediaKey = await mediaKeyForSession(mediaKeyWrapping);
+      const index = {version: MEDIA_INDEX_VERSION, folders: [], items: []};
+      const sealed = await sealMediaIndex(mediaKey, index, mainSession.config.vaultId);
+      const envelope = {
+        version: 1, vaultId: mainSession.config.vaultId, salt, iterations: ITERATIONS,
+        wrapIv: wrap.wrapIv, wrappedKey: wrap.wrappedKey, revision: 1,
+        indexIv: sealed.indexIv, indexCiphertext: sealed.indexCiphertext, usedBytes: 0,
+        authHash: await authHash(derived.token),
+      };
+      await mediaApi('/api/media/setup', {method: 'POST', body: JSON.stringify(envelope)}, mainSession, derived.token);
+      mediaSession = {token: derived.token, mediaKey, envelope, index, kek: derived.key};
+      break;
+    }
   } else {
-    envelope = await (await mediaApi('/api/media/vault', {}, mainSession, derived.token)).json();
-    try {
-      mediaKey = await unwrapMediaKey(derived.key, envelope.wrapIv, envelope.wrappedKey, envelope.vaultId);
-    } catch {
-      throw Error('Wrong media password.');
+    let wrong = false;
+    while (true) {
+      const mediaPassword = await promptMediaPassword({setup: false, masterDigestB64, wrongHint: wrong});
+      if (mediaPassword === null) return;
+      onMessage('Deriving media key…');
+      const derived = await deriveMedia(mediaPassword, status.salt);
+      const envelope = await (await mediaApi('/api/media/vault', {}, mainSession, derived.token)).json();
+      try {
+        const mediaKey = await unwrapMediaKey(derived.key, envelope.wrapIv, envelope.wrappedKey, envelope.vaultId);
+        const index = await openMediaIndex(mediaKey, envelope);
+        mediaSession = {token: derived.token, mediaKey, envelope, index, kek: derived.key};
+        ensureIndex(mediaSession);
+        break;
+      } catch {
+        wrong = true;
+        onMessage('Wrong media password.');
+      }
     }
-    let index;
-    try {
-      index = await openMediaIndex(mediaKey, envelope);
-    } catch {
-      throw Error('Unable to decrypt media index.');
-    }
-    mediaSession = {token: derived.token, mediaKey, envelope, index, kek: derived.key};
-    ensureIndex(mediaSession);
   }
   touchMediaActivity();
   renderMediaWorkspace(mainSession, onMessage, onBusy);
@@ -513,11 +522,15 @@ function renderMediaWorkspace(mainSession, onMessage, onBusy) {
   newFolderBtn.type = 'button';
   newFolderBtn.textContent = 'New folder';
   newFolderBtn.onclick = () => {
-    const name = prompt('Folder name:');
-    if (!name) return;
     onBusy(async () => {
+      const name = await promptDialog({
+        title: 'New folder',
+        label: 'Folder name',
+        submitLabel: 'Create',
+      });
+      if (name === null || !name.trim()) return;
       try {
-        createFolder(mediaSession.index, name, currentFolderId);
+        createFolder(mediaSession.index, name.trim(), currentFolderId);
         await saveMediaIndex(mainSession);
         await paintGrid(mainSession, $('media-grid'), onMessage, onBusy);
         onMessage('Folder created.');
@@ -532,10 +545,15 @@ function renderMediaWorkspace(mainSession, onMessage, onBusy) {
   renameFolderBtn.onclick = () => {
     if (!currentFolderId) { onMessage('Open a folder to rename.'); return; }
     const folder = mediaSession.index.folders.find(f => f.id === currentFolderId);
-    const name = prompt('Rename folder:', folder?.name || '');
-    if (!name) return;
     onBusy(async () => {
-      renameFolder(mediaSession.index, currentFolderId, name);
+      const name = await promptDialog({
+        title: 'Rename folder',
+        label: 'Folder name',
+        defaultValue: folder?.name || '',
+        submitLabel: 'Rename',
+      });
+      if (name === null || !name.trim()) return;
+      renameFolder(mediaSession.index, currentFolderId, name.trim());
       await saveMediaIndex(mainSession);
       renderBreadcrumb($('media-breadcrumb'), mainSession, $('media-grid'), onMessage, onBusy);
       await paintGrid(mainSession, $('media-grid'), onMessage, onBusy);
@@ -547,8 +565,8 @@ function renderMediaWorkspace(mainSession, onMessage, onBusy) {
   deleteFolderBtn.textContent = 'Delete folder';
   deleteFolderBtn.onclick = () => {
     if (!currentFolderId) { onMessage('Open a folder to delete.'); return; }
-    if (!confirm('Delete this empty folder?')) return;
     onBusy(async () => {
+      if (!await confirmDialog('Delete this empty folder?', {title: 'Delete folder?', danger: true, confirmLabel: 'Delete'})) return;
       try {
         deleteFolder(mediaSession.index, currentFolderId);
         currentFolderId = null;
@@ -568,9 +586,17 @@ function renderMediaWorkspace(mainSession, onMessage, onBusy) {
   moveBtn.hidden = true;
   moveBtn.onclick = () => {
     if (!selectedItemIds.size) return;
-    const target = prompt('Move into folder name (leave empty for root):', '');
-    if (target === null) return;
     onBusy(async () => {
+      const target = await promptDialog({
+        title: 'Move selected',
+        help: 'Leave blank to move to the current folder root.',
+        label: 'Destination folder name',
+        defaultValue: '',
+        required: false,
+        placeholder: 'Root',
+        submitLabel: 'Move',
+      });
+      if (target === null) return;
       let targetId = null;
       if (String(target).trim()) {
         const existing = mediaSession.index.folders.find(
@@ -622,10 +648,7 @@ function renderMediaWorkspace(mainSession, onMessage, onBusy) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     onMessage('Media export downloaded (.lvmedia).');
   });
-  const idle = document.createElement('label');
-  idle.className = 'idle-label';
-  idle.innerHTML = 'Media auto-lock<select id="media-idle"><option value="1">1 minute</option><option value="2" selected>2 minutes</option><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option></select>';
-  head.append(title, lockBtn, upload, folderUpload, newFolderBtn, renameFolderBtn, deleteFolderBtn, moveBtn, importLbl, exportBtn, idle);
+  head.append(title, lockBtn, upload, folderUpload, newFolderBtn, renameFolderBtn, deleteFolderBtn, moveBtn, importLbl, exportBtn);
   const breadcrumb = document.createElement('nav');
   breadcrumb.id = 'media-breadcrumb';
   breadcrumb.className = 'media-breadcrumb';
@@ -892,11 +915,16 @@ async function paintGrid(mainSession, grid, onMessage, onBusy) {
     const rename = document.createElement('button');
     rename.type = 'button'; rename.textContent = 'Rename';
     rename.onclick = () => {
-      const next = prompt('New filename:', meta.filename);
-      if (!next || next === meta.filename) return;
       onBusy(async () => {
+        const next = await promptDialog({
+          title: 'Rename file',
+          label: 'Filename',
+          defaultValue: meta.filename,
+          submitLabel: 'Rename',
+        });
+        if (next === null || !next.trim() || next.trim() === meta.filename) return;
         const itemKey = await unwrapItemKey(mediaSession.mediaKey, item.wrappedKey, mainSession.config.vaultId, item.id);
-        const newMeta = {...meta, filename: next};
+        const newMeta = {...meta, filename: next.trim()};
         const box = await encryptMeta(itemKey, newMeta, mainSession.config.vaultId, item.id);
         item.metaIv = box.metaIv; item.metaCiphertext = box.metaCiphertext;
         await saveMediaIndex(mainSession);
@@ -907,8 +935,8 @@ async function paintGrid(mainSession, grid, onMessage, onBusy) {
     const del = document.createElement('button');
     del.type = 'button'; del.className = 'danger'; del.textContent = 'Delete';
     del.onclick = () => {
-      if (!confirm(`Delete “${meta.filename}”?`)) return;
       onBusy(async () => {
+        if (!await confirmDialog(`Delete “${meta.filename}”?`, {title: 'Delete media?', danger: true, confirmLabel: 'Delete'})) return;
         await mediaApi(`/api/media/items/${item.id}`, {method: 'DELETE'}, mainSession);
         mediaSession.index.items = mediaSession.index.items.filter(x => x.id !== item.id);
         selectedItemIds.delete(item.id);
@@ -945,7 +973,6 @@ export function wireMedia(mainSession, onMessage, onBusy, masterDigestB64) {
       await unlockMediaFlow(mainSession, masterDigestB64, onMessage, onBusy);
     }));
     window.addEventListener('focus', () => { setTimeout(() => { mediaFilePickerOpen = false; }, 400); });
-    document.addEventListener('visibilitychange', onMediaVisibilityChange);
   }
 }
 
@@ -953,18 +980,18 @@ export function onVaultLockMedia() {
   lockMedia();
 }
 
-export function mediaIdleMinutes() {
-  const el = $('media-idle');
-  return Number(el?.value || 2);
-}
-
 export function touchMediaFromVault() {
   touchMediaActivity();
 }
 
 async function importLvmedia(mainSession, file, onMessage, onBusy) {
-  const password = prompt('Media password used when this .lvmedia was exported:');
-  if (!password) return;
+  const password = await promptPasswordDialog({
+    title: 'Import .lvmedia',
+    help: 'Enter the Photos & Videos password used when this export was created.',
+    label: 'Media password',
+    submitLabel: 'Import',
+  });
+  if (password === null) return;
   const head = new Uint8Array(await file.slice(0, 13).arrayBuffer());
   if (new TextDecoder().decode(head.slice(0, 9)) !== 'LVMEDIA01') throw Error('Not a .lvmedia file.');
   const metaLen = new DataView(head.buffer).getUint32(9);
