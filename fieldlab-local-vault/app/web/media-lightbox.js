@@ -87,13 +87,16 @@ export function openMediaLightbox(ctx) {
       clearTimeout(slideshowTimer);
       slideshowTimer = null;
     }
+    delete root.dataset.slideshowActive;
   }
 
   function scheduleSlideshowTick() {
     if (!slideshowMs || slideshowPaused) return;
     clearSlideshow();
+    root.dataset.slideshowActive = '1';
     slideshowTimer = setTimeout(() => {
       slideshowTimer = null;
+      bumpActivity();
       goNext(true);
     }, slideshowMs);
   }

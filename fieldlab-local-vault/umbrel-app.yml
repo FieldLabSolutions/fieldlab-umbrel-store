@@ -3,7 +3,7 @@ id: fieldlab-local-vault
 category: files
 name: Field Lab Vault
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-local-vault/icon.png
-version: "1.2.0"
+version: "1.2.1"
 tagline: Local-only encrypted notes and files with browser-side WebCrypto
 description: >-
   Personal ciphertext-only vault: AES-256-GCM notes and attachments (up to 128 MiB each),
@@ -29,6 +29,10 @@ path: ""
 defaultUsername: ""
 defaultPassword: ""
 releaseNotes: >-
+  1.2.1: Replace browser prompt/alert/confirm with in-page modals (Photos & Videos unlock matches vault login).
+  Vault auto-lock defaults to 30 minutes (15 min / 30 min / 1 h / 4 h / Never), stored in localStorage; media
+  uses the same timer; background tabs no longer force early lock. TLS server cert profile fixed (397-day lifetime,
+  keyUsage and serverAuth); /ca documents Windows certutil and Chrome restart.
   1.2.0: Photos & Videos viewer — full-screen lightbox with prev/next, keyboard and swipe navigation,
   image zoom and pan, inline video, slideshow (3/5/10s), and folder albums (create, rename, move,
   multi-select, drag-drop and folder upload). Media index v2 with encrypted folder tree; .lvmedia

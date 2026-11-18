@@ -16,10 +16,11 @@ CA_BASENAME = 'ca'
 SERVER_CERT = 'tls.crt'
 SERVER_KEY = 'tls.key'
 CA_MARKER = 'pki.version'
-PKI_VERSION = '2'
+PKI_VERSION = '3'
 DEFAULT_FALLBACK_IP = '192.168.4.99'
 RENEW_BEFORE_DAYS = 45
-SERVER_CERT_DAYS = 825
+SERVER_CERT_DAYS = 397
+MAX_SERVER_CERT_DAYS = 397
 CA_CERT_DAYS = 3650
 NAME_CONSTRAINT_CIDR = os.environ.get('VAULT_CA_IP_NET', '192.168.4.0/24')
 
@@ -106,6 +107,25 @@ def server_san_extension(ips: list[str]) -> str:
     return 'subjectAltName=' + ','.join(entries)
 
 
+def _cert_total_validity_days(cert_path: Path) -> int | None:
+    if not cert_path.is_file():
+        return None
+    try:
+        out = _openssl_run(['x509', '-in', str(cert_path), '-noout', '-startdate', '-enddate']).stdout
+    except subprocess.CalledProcessError:
+        return None
+    start_m = re.search(r'notBefore=(.+)', out)
+    end_m = re.search(r'notAfter=(.+)', out)
+    if not start_m or not end_m:
+        return None
+    try:
+        start = datetime.strptime(start_m.group(1), '%b %d %H:%M:%S %Y %Z').replace(tzinfo=timezone.utc)
+        end = datetime.strptime(end_m.group(1), '%b %d %H:%M:%S %Y %Z').replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return max(0, (end - start).days)
+
+
 def _cert_days_remaining(cert_path: Path) -> int | None:
     if not cert_path.is_file():
         return None
@@ -174,23 +194,52 @@ def ensure_ca(cert_dir: Path) -> tuple[Path, Path]:
     return ca_key, ca_cert
 
 
+def _server_san_list(ips: list[str]) -> str:
+    entries = ['DNS:localhost', 'DNS:umbrel.local']
+    entries.extend(f'IP:{ip}' for ip in ips)
+    return ','.join(entries)
+
+
+def _server_cert_extensions_ok(cert_path: Path) -> bool:
+    try:
+        text = _openssl_run(['x509', '-in', str(cert_path), '-text', '-noout']).stdout
+    except subprocess.CalledProcessError:
+        return False
+    if 'CA:FALSE' not in text and 'CA: FALSE' not in text:
+        return False
+    if 'Digital Signature' not in text:
+        return False
+    if 'Key Encipherment' not in text:
+        return False
+    return 'TLS Web Server Authentication' in text or 'serverAuth' in text
+
+
 def issue_server_cert(cert_dir: Path, ca_key: Path, ca_cert: Path, ips: list[str]) -> None:
     cert_path = cert_dir / SERVER_CERT
     key_path = cert_dir / SERVER_KEY
     csr_path = cert_dir / '.tls.csr'
+    ext_path = cert_dir / '.tls.ext'
     serial_path = cert_dir / '.ca.srl'
     try:
         if not key_path.is_file():
             _openssl_run(['genrsa', '-out', str(key_path), '3072'])
             _chmod_sensitive(key_path)
-        san = server_san_extension(ips)
         _openssl_run([
             'req', '-new', '-sha256',
             '-key', str(key_path),
             '-out', str(csr_path),
             '-subj', '/CN=Field Lab Vault',
-            '-addext', san,
         ])
+        san_list = _server_san_list(ips)
+        ext_path.write_text(
+            '[v3_req]\n'
+            'basicConstraints = critical, CA:FALSE\n'
+            'keyUsage = critical, digitalSignature, keyEncipherment\n'
+            'extendedKeyUsage = serverAuth\n'
+            f'subjectAltName = {san_list}\n',
+            encoding='utf-8',
+        )
+        _chmod_sensitive(ext_path)
         args = [
             'x509', '-req', '-sha256',
             '-days', str(SERVER_CERT_DAYS),
@@ -198,7 +247,8 @@ def issue_server_cert(cert_dir: Path, ca_key: Path, ca_cert: Path, ips: list[str
             '-CA', str(ca_cert),
             '-CAkey', str(ca_key),
             '-out', str(cert_path),
-            '-copy_extensions', 'copyall',
+            '-extfile', str(ext_path),
+            '-extensions', 'v3_req',
         ]
         if serial_path.is_file():
             args.extend(['-CAserial', str(serial_path)])
@@ -212,6 +262,8 @@ def issue_server_cert(cert_dir: Path, ca_key: Path, ca_cert: Path, ips: list[str
     finally:
         if csr_path.is_file():
             csr_path.unlink()
+        if ext_path.is_file():
+            ext_path.unlink()
 
 
 def migrate_legacy_self_signed(cert_dir: Path) -> None:
@@ -233,6 +285,11 @@ def needs_server_cert(cert_dir: Path, ca_cert: Path) -> bool:
     if not cert_path.is_file() or not key_path.is_file():
         return True
     if not _cert_issued_by_local_ca(cert_path, ca_cert):
+        return True
+    if not _server_cert_extensions_ok(cert_path):
+        return True
+    lifetime = _cert_total_validity_days(cert_path)
+    if lifetime is None or lifetime > MAX_SERVER_CERT_DAYS:
         return True
     days = _cert_days_remaining(cert_path)
     if days is None or days <= RENEW_BEFORE_DAYS:

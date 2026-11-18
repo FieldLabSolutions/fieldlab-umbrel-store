@@ -50,6 +50,15 @@ class CertSetupTests(unittest.TestCase):
         self.assertIn('IP Address:127.0.0.1', san.replace('IP:', 'IP Address:'))
         self.assertIn('192.168.4.99', san)
         self.assertIn('192.168.4.50', san)
+        tls_text = subprocess.check_output(['openssl', 'x509', '-in', str(tls), '-text'], text=True)
+        self.assertIn('TLS Web Server Authentication', tls_text)
+        self.assertIn('Digital Signature', tls_text)
+        self.assertIn('Key Encipherment', tls_text)
+        lifetime = cert_setup._cert_total_validity_days(tls)
+        self.assertIsNotNone(lifetime)
+        self.assertLessEqual(lifetime, cert_setup.MAX_SERVER_CERT_DAYS)
+        ca_text = subprocess.check_output(['openssl', 'x509', '-in', str(ca), '-text'], text=True)
+        self.assertIn('CA:TRUE', ca_text)
         mode = (self.cert_dir / 'ca.key').stat().st_mode & 0o777
         self.assertEqual(mode, 0o600)
 

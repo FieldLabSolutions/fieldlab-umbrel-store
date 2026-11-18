@@ -1,6 +1,8 @@
 import {ITERATIONS, MAX_FILE, b64, unb64, random, derive, authHash, encrypt, decrypt, sealIndex, openIndex, migrateIndexToCurrent, fileAAD, utf8} from './crypto.js';
 import {BIP39_WORD_COUNTS, isBip39Word, uniqueWordForPrefix, suggestions, validateBip39Checksum} from './bip39.js';
-import {wireMedia, lockMedia, onVaultLockMedia, checkMediaIdle, mediaIdleMinutes, touchMediaFromVault, mediaIsUnlocked} from './media.js';
+import {wireMedia, lockMedia, onVaultLockMedia, checkMediaIdle, touchMediaFromVault, mediaIsUnlocked, registerVaultActivity} from './media.js';
+import {wireIdleSelect, shouldAutoLock} from './idle-policy.js';
+import {confirmDialog} from './vault-dialogs.js';
 const $ = id => document.getElementById(id);
 let setup = false, session = null, busy = false, pendingImport = null, generation = 0;
 let lastActivity = Date.now(), dirty = false;
@@ -86,7 +88,17 @@ function allAttachments(index) {
   const fromWallets = (index.wallets || []).flatMap(w => w.attachments || []);
   return fromNotes.concat(fromWallets);
 }
+function touchVaultActivity() {
+  lastActivity = Date.now();
+}
+
+function registerVaultIdleHooks() {
+  registerVaultActivity(touchVaultActivity);
+}
+
 async function init() {
+  wireIdleSelect();
+  registerVaultIdleHooks();
   if (!isSecureContext || !crypto.subtle) {
     message('Open this vault over HTTPS in a current browser. Encryption requires a secure context.');
     $('unlock-submit').disabled = true; return;
@@ -241,10 +253,10 @@ function openAttachmentEditor(kind, parentId, attachmentId) {
   $('attachment-dialog').showModal();
   $('attachment-label').focus();
 }
-function editNote(id = null) {
+async function editNote(id = null) {
   if (busy) return;
   lockMedia();
-  if (dirty && !confirm('Discard unsaved edits to this note?')) return;
+  if (dirty && !await confirmDialog('Discard unsaved edits to this note?', {title: 'Discard edits?'})) return;
   editingWalletId = null;
   const note = id ? structuredClone(currentNoteInIndex(id)) : {id: crypto.randomUUID(), title: '', body: '', attachments: []};
   if (!note) return;
@@ -291,7 +303,7 @@ function editNote(id = null) {
   }));
   $('editor').append(heading, title, body, attachWrap, attachments, saveBtn, hint);
   if (id) $('editor').append(button('Delete note', () => task(async () => {
-    if (!confirm('Permanently delete this note and its attachments? Existing exported backups are not changed.')) return;
+    if (!await confirmDialog('Permanently delete this note and its attachments? Existing exported backups are not changed.', {title: 'Delete note?', danger: true, confirmLabel: 'Delete'})) return;
     const s = session; ensure(s);
     const existing = currentNoteInIndex(id);
     for (const att of existing?.attachments || []) await api(`/api/files/${att.id}`, {method: 'DELETE'}, s).catch(() => {});
@@ -327,7 +339,7 @@ async function deleteAttachment(kind, parentId, attachmentId) {
   const parent = parentRecord(kind, parentId);
   const att = parent?.attachments?.find(a => a.id === attachmentId);
   if (!att) return;
-  if (!confirm(`Permanently delete attachment “${att.label || att.name}”?`)) return;
+  if (!await confirmDialog(`Permanently delete attachment “${att.label || att.name}”?`, {title: 'Delete attachment?', danger: true, confirmLabel: 'Delete'})) return;
   const s = session; ensure(s);
   const current = structuredClone(parent);
   current.attachments = current.attachments.filter(a => a.id !== attachmentId);
@@ -520,10 +532,10 @@ function wireWalletWordInput(input, inputs, onChange) {
     onChange();
   });
 }
-function editWallet(id = null) {
+async function editWallet(id = null) {
   if (busy) return;
   lockMedia();
-  if (dirty && !confirm('Discard unsaved edits to this wallet?')) return;
+  if (dirty && !await confirmDialog('Discard unsaved edits to this wallet?', {title: 'Discard edits?'})) return;
   editingNoteId = null;
   const wallet = id ? structuredClone(currentWalletInIndex(id)) : {
     id: crypto.randomUUID(), name: '', notes: '', wordCount: 12, words: Array(12).fill(''), passphrase: '', attachments: []
@@ -611,7 +623,7 @@ function editWallet(id = null) {
     if (bad.length) throw Error('Every entered word must be an exact BIP39 English word.');
     if (words.some(w => !w)) throw Error('Fill every word box or change the word count.');
     const checksumResult = await validateBip39Checksum(words);
-    if (!checksumResult.valid && !confirm('BIP39 checksum is INVALID. Save anyway so you can fix typos later?')) return;
+    if (!checksumResult.valid && !await confirmDialog('BIP39 checksum is INVALID. Save anyway so you can fix typos later?', {title: 'Invalid checksum', confirmLabel: 'Save anyway'})) return;
     const current = {
       id: editingWalletId, name: name.value.trim(), notes: notes.value, wordCount: Number(count.value),
       words, passphrase: pass.value, attachments: structuredClone((currentWalletInIndex(editingWalletId) || wallet).attachments || [])
@@ -621,7 +633,7 @@ function editWallet(id = null) {
   const hint = document.createElement('p'); hint.className = 'muted'; hint.textContent = 'Recovery words are hidden by default. They are encrypted in your vault and are not included in search.';
   $('editor').append(heading, name, notes, countLabel, revealLabel, wordGrid, checksum, passLabel, attachWrap, attachments, saveBtn, hint);
   if (id) $('editor').append(button('Delete wallet', () => task(async () => {
-    if (!confirm('Permanently delete this wallet backup and its attachments?')) return;
+    if (!await confirmDialog('Permanently delete this wallet backup and its attachments?', {title: 'Delete wallet?', danger: true, confirmLabel: 'Delete'})) return;
     const s = session; const existing = currentWalletInIndex(id);
     for (const att of existing?.attachments || []) await api(`/api/files/${att.id}`, {method: 'DELETE'}, s).catch(() => {});
     const index = structuredClone(s.index); index.wallets = index.wallets.filter(w => w.id !== id);
@@ -633,17 +645,17 @@ $('new-note').onclick = () => editNote();
 $('new-wallet').onclick = () => editWallet();
 $('search').addEventListener('input', render);
 $('lock').onclick = lock;
-for (const event of ['pointerdown','keydown','input','touchstart','wheel']) window.addEventListener(event, () => {
-  const limit = Number($('idle').value) * 60000;
-  if (session && Date.now() - lastActivity >= limit) lock();
+const bumpActivityAndCheckLock = () => {
+  if (session && shouldAutoLock(lastActivity)) lock();
   lastActivity = Date.now();
   if (mediaIsUnlocked()) touchMediaFromVault();
-}, {passive: true, capture: true});
+};
+for (const event of ['pointerdown', 'keydown', 'input', 'touchstart', 'wheel', 'scroll']) {
+  window.addEventListener(event, bumpActivityAndCheckLock, {passive: true, capture: true});
+}
 setInterval(() => {
-  if (session && Date.now() - lastActivity >= Number($('idle').value) * 60000) lock();
-  if (session && mediaIsUnlocked()) checkMediaIdle(session, mediaIdleMinutes());
+  if (session && shouldAutoLock(lastActivity)) lock();
+  if (session && mediaIsUnlocked()) checkMediaIdle(session);
 }, 1000);
-window.addEventListener('pagehide', lock);
 window.addEventListener('beforeunload', event => {if (dirty) {event.preventDefault(); event.returnValue = '';}});
-document.addEventListener('visibilitychange', () => {if (session && Date.now() - lastActivity >= Number($('idle').value) * 60000) lock();});
 init().catch(error => message(error.message));
