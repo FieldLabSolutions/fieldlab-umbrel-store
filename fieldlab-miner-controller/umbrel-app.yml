@@ -4,7 +4,7 @@ name: Miner Controller 3000
 tagline: Weather-driven heat controller for the home miners (Avalon Qs + BitAxe)
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-miner-controller/icon.png
 category: bitcoin
-version: "1.5.20"
+version: "1.5.21"
 port: 8742
 description: >-
   Private LAN controller for home Avalon Q miners and BitAxes.
@@ -20,6 +20,12 @@ repo: ""
 support: ""
 gallery: []
 releaseNotes: >-
+  1.5.21: Block Party can switch miners to Rigly up to 30 minutes before the official start
+  (slider in Edit party settings, 0–30 in steps of 5; default 0). The status box still shows the
+  official next party time and, when early is set, when miners will actually switch. Edit party
+  settings now shows the full Rigly worker (with copy) and labels the optional bc1 field clearly.
+  BitAxe status detects a Rigly pool slot anywhere in the pool list, not only when it is active.
+
   1.5.20: Block Party no longer runs every day when left on. Pick which days of the week
   the window applies (default Saturday only). The quick-look box shows scheduled days and the
   next party start; day checkboxes are in Edit party settings. Cross-midnight windows still
