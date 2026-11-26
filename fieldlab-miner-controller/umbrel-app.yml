@@ -4,7 +4,7 @@ name: Miner Controller 3000
 tagline: Weather-driven heat controller for the home miners (Avalon Qs + BitAxe)
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-miner-controller/icon.png
 category: bitcoin
-version: "1.6.1"
+version: "1.6.2"
 port: 8742
 description: >-
   Private LAN controller for home Avalon Q miners and BitAxes.
@@ -20,6 +20,11 @@ repo: ""
 support: ""
 gallery: []
 releaseNotes: >-
+  1.6.2: The Lab miner can follow the Lab indoor sensor against the indoor
+  target (Super when the room is below target, step down near or above it).
+  The 96°C chip guard still applies. Other miners still follow outside
+  temperature. The Outside forecast now loads even when a miner is in Super.
+
   1.6.1: Pool switch. A new Pool control in the header picks where every miner on the ETBC Pool switch mines:
   Datum, Block Party or Solo ETBC. Block Party now flips the switch at the start of the window and puts it back
   to whatever it was on when the window ends. Needs ETBC Pool 0.2.2. "Our pool" now reads "Solo ETBC".
