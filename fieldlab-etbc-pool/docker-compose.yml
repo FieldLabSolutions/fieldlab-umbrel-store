@@ -22,7 +22,9 @@ services:
     user: "1000:1000"
     init: true
     stop_grace_period: 30s
-    # 0.2.2: ckpool listens on 3334 inside the app network only; miners connect to the switch on 3333
+    ports:
+      # Stratum on the Umbrel's LAN IP (LAN only; no router forward, no tunnel)
+      - 3333:3333
     # share logging (-L) always on: data/logs/<height>/<workbase>.sharelog, pruned after 14 days
     # optional tuning: data/ckpool-overrides.json (see data/ckpool-overrides.example.json), applied on restart
     environment:
@@ -31,26 +33,6 @@ services:
       RPC_USER: ${APP_BITCOIN_RPC_USER}
       RPC_PASS: ${APP_BITCOIN_RPC_PASS}
       ZMQ_HASHBLOCK: tcp://${APP_BITCOIN_NODE_IP}:${APP_BITCOIN_ZMQ_HASHBLOCK_PORT}
-      STRATUM_PORT: 3334
-    volumes:
-      - ${APP_DATA_DIR}/data:/data
-
-  switch:
-    # 0.2.2 pool switch: 1-to-1 Stratum proxy, same image. Sends every miner's work to Solo ETBC (this pool),
-    # Datum or Block Party; Miner Controller flips it. Config/token: data/switch.json (mode 600, never in this repo).
-    # Without data/switch.json it is a transparent proxy to this pool (same behavior as 0.1.5).
-    image: ghcr.io/fieldlabsolutions/etbc-pool:0.2.2@sha256:39dccdfc4c7a765e044cc9248e9c67fe3ab04170b06249b49859acbd473e841d   # public multi-arch, pinned by digest
-    entrypoint: ["python3", "-u", "/opt/switch/stratum_switch.py"]
-    restart: on-failure
-    user: "1000:1000"
-    init: true
-    stop_grace_period: 10s
-    ports:
-      # Stratum on the Umbrel's LAN IP (LAN only; no router forward, no tunnel). Control API 3340 is not published.
-      - 3333:3333
-    environment:
-      SWITCH_CONFIG: /data/switch.json
-      ETBC_HOST: fieldlab-etbc-pool_pool_1
-      ETBC_PORT: 3334
+      STRATUM_PORT: 3333
     volumes:
       - ${APP_DATA_DIR}/data:/data

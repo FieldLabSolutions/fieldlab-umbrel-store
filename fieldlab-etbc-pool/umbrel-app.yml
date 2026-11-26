@@ -4,7 +4,7 @@ category: bitcoin
 name: ETBC Pool
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-etbc-pool/icon.png
 tagline: Private LAN solo mining pool (ckpool) on your own node
-version: "0.2.2"
+version: "0.2.3"
 port: 8745
 description: >-
   Private LAN solo pool for your miners. Point a miner at stratum+tcp://<UMBREL_LAN_IP>:3333
@@ -25,6 +25,9 @@ path: ""
 defaultUsername: ""
 defaultPassword: ""
 releaseNotes: >-
+  0.2.3: Rollback. Removes the pool switch; miners connect straight to the pool on 3333 again (same as 0.1.5).
+
+
   0.2.2: Adds the pool switch. Miners still point at port 3333, which is now a small proxy in front of the
   pool; Miner Controller 1.6 can send all of their work to Solo ETBC, Datum or Block Party with one control.
   Until it is set up (data/switch.json), it simply passes miners through to this pool exactly as before.
