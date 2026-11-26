@@ -4,7 +4,7 @@ name: Miner Controller 3000
 tagline: Weather-driven heat controller for the home miners (Avalon Qs + BitAxe)
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-miner-controller/icon.png
 category: bitcoin
-version: "1.6.2"
+version: "1.6.3"
 port: 8742
 description: >-
   Private LAN controller for home Avalon Q miners and BitAxes.
@@ -20,6 +20,10 @@ repo: ""
 support: ""
 gallery: []
 releaseNotes: >-
+  1.6.3: When outside is below 50°F, the Lab indoor target rises to at least
+  72°F (same ±1.5 band, with 1°F switch hysteresis). The Outside card shows
+  the active target and why (for example, cold boost: outside <50F).
+
   1.6.2: The Lab miner can follow the Lab indoor sensor against the indoor
   target (Super when the room is below target, step down near or above it).
   The 96°C chip guard still applies. Other miners still follow outside
