@@ -4,7 +4,7 @@ name: Miner Controller 3000
 tagline: Weather-driven heat controller for the home miners (Avalon Qs + BitAxe)
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-miner-controller/icon.png
 category: bitcoin
-version: "1.6.5"
+version: "1.6.6"
 port: 8742
 description: >-
   Private LAN controller for home Avalon Q miners and BitAxes.
@@ -20,6 +20,12 @@ repo: ""
 support: ""
 gallery: []
 releaseNotes: >-
+  1.6.6: Avalon Full details now opens with a Cooling block of big tiles for heat
+  experiments: intake temperature (°C and °F), hashboard in/out and the rise between
+  them, chip average/max/target, fan % and average fan RPM. Includes 1.6.5 (Full
+  details on every miner card) and 1.6.4 (OCEAN warning only while on Datum).
+
+
   1.6.5: Full details on every miner card. Tap a miner to expand it and the new
   Full details panel shows everything the miner reports, read-only: chip and
   hashboard temperatures (°C and °F) with the hottest chips, fans, power,
