@@ -4,7 +4,7 @@ name: Miner Controller 3000
 tagline: Weather-driven heat controller for the home miners (Avalon Qs + BitAxe)
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-miner-controller/icon.png
 category: bitcoin
-version: "1.6.4"
+version: "1.6.5"
 port: 8742
 description: >-
   Private LAN controller for home Avalon Q miners and BitAxes.
@@ -20,6 +20,15 @@ repo: ""
 support: ""
 gallery: []
 releaseNotes: >-
+  1.6.5: Full details on every miner card. Tap a miner to expand it and the new
+  Full details panel shows everything the miner reports, read-only: chip and
+  hashboard temperatures (°C and °F) with the hottest chips, fans, power,
+  voltage and efficiency, realtime vs 1/5/15-minute vs average hashrate, shares,
+  rejects and hardware errors, every pool slot (payout addresses masked),
+  firmware and MAC. BitAxe shows its full AxeOS stats; Apollo shows what the
+  ETBC pool switch sees. Includes 1.6.4 (OCEAN warning only while on Datum).
+
+
   1.6.4: The OCEAN "little or no hashrate" warning only applies while the Pool
   switch is on Datum. On Solo ETBC or Block Party it is skipped and an existing
   OCEAN problem clears right away. After switching back to Datum it waits 30
