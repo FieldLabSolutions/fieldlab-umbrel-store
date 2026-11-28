@@ -4,7 +4,7 @@ name: Miner Controller 3000
 tagline: Weather-driven heat controller for the home miners (Avalon Qs + BitAxe)
 icon: https://raw.githubusercontent.com/FieldLabSolutions/fieldlab-umbrel-store/main/fieldlab-miner-controller/icon.png
 category: bitcoin
-version: "1.6.7"
+version: "1.6.8"
 port: 8742
 description: >-
   Private LAN controller for home Avalon Q miners and BitAxes.
@@ -20,6 +20,12 @@ repo: ""
 support: ""
 gallery: []
 releaseNotes: >-
+  1.6.8: Apollo Eco / Balanced / Turbo now work on older Apollo OS that does
+  not have a nodeSoftware setting (1.6.7 could not read the mode or apply a
+  change on those units). The card also shows the current mode after login.
+  Includes 1.6.7 (Apollo temps, fans, power and mode buttons).
+
+
   1.6.7: FutureBit Apollo II now shows temperatures, fan speeds, power and
   hashrate on its card and in Full details. Tap "Apollo login" on the Apollo
   card and save the Apollo password once (stored privately on this Umbrel).
